@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import ssl
 import time
 from typing import Any, Optional
 from urllib.request import Request, urlopen
@@ -16,6 +17,20 @@ DEFAULT_TIMEOUT = 30
 MAX_RETRIES = 2
 
 
+def _default_ssl_context() -> ssl.SSLContext:
+    """Create an SSL context that works across platforms.
+
+    Uses certifi certificates if available (common on macOS where the
+    system Python may not include root CAs), otherwise falls back to
+    the platform default.
+    """
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        return ssl.create_default_context()
+
+
 class HttpClient:
     """Sync HTTP client using urllib (zero dependencies)."""
 
@@ -23,6 +38,7 @@ class HttpClient:
         self._api_key = api_key
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout
+        self._ssl_ctx = _default_ssl_context()
 
     def request(
         self,
@@ -53,7 +69,7 @@ class HttpClient:
         for attempt in range(MAX_RETRIES + 1):
             try:
                 req = Request(url, data=data, headers=req_headers, method=method)
-                with urlopen(req, timeout=self._timeout) as resp:
+                with urlopen(req, timeout=self._timeout, context=self._ssl_ctx) as resp:
                     if resp.status == 204:
                         return None
                     return json.loads(resp.read().decode("utf-8"))
