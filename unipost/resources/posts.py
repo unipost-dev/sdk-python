@@ -1,7 +1,7 @@
 """Posts resource."""
 
 from __future__ import annotations
-from typing import Any, Generator, Optional
+from typing import Any, Generator, List, Optional
 
 from unipost.types import Post, PostAnalytics, PlatformResult, _from_dict
 
@@ -122,7 +122,7 @@ class Posts:
         resp = self._http.post(f"/v1/social-posts/{post_id}/cancel")
         return _parse_post(resp["data"])
 
-    def bulk_create(self, posts: list[dict[str, Any]]) -> list[Post]:
+    def bulk_create(self, posts: List[dict[str, Any]]) -> List[Post]:
         """Bulk create posts (up to 50)."""
         bodies = []
         for p in posts:
