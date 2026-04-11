@@ -18,9 +18,17 @@ PublishMode = Literal["now", "schedule", "queue", "draft"]
 
 
 @dataclass
+class Profile:
+    id: str
+    name: Optional[str] = None
+    created_at: str = ""
+
+
+@dataclass
 class SocialAccount:
     id: str
     platform: str
+    profile_id: str = ""
     account_name: Optional[str] = None
     external_user_id: Optional[str] = None
     external_user_email: Optional[str] = None

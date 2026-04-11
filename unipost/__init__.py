@@ -14,6 +14,7 @@ from unipost.errors import (
 from unipost.webhook import verify_webhook_signature
 from unipost.types import (
     SocialAccount,
+    Profile,
     Post,
     PlatformResult,
     ConnectSession,
@@ -21,8 +22,9 @@ from unipost.types import (
     PostAnalytics,
     AnalyticsRollup,
 )
+from unipost.resources.profiles import Profiles
 
-__version__ = "0.1.1"
+__version__ = "0.2.0"
 __all__ = [
     "UniPost",
     "AsyncUniPost",
@@ -35,6 +37,8 @@ __all__ = [
     "QuotaError",
     "verify_webhook_signature",
     "SocialAccount",
+    "Profile",
+    "Profiles",
     "Post",
     "PlatformResult",
     "ConnectSession",

@@ -16,6 +16,7 @@ class Accounts:
         platform: Optional[str] = None,
         external_user_id: Optional[str] = None,
         status: Optional[str] = None,
+        profile_id: Optional[str] = None,
     ) -> dict[str, Any]:
         """List all connected social accounts."""
         query: dict[str, Any] = {}
@@ -25,6 +26,8 @@ class Accounts:
             query["external_user_id"] = external_user_id
         if status:
             query["status"] = status
+        if profile_id:
+            query["profile_id"] = profile_id
         resp = self._http.get("/v1/social-accounts", query=query or None)
         resp["data"] = [_from_dict(SocialAccount, a) for a in resp.get("data", [])]
         return resp

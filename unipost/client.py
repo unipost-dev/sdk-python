@@ -11,6 +11,7 @@ from unipost.resources.media import Media
 from unipost.resources.analytics import Analytics
 from unipost.resources.connect import Connect
 from unipost.resources.users import Users
+from unipost.resources.profiles import Profiles
 
 
 class UniPost:
@@ -34,6 +35,7 @@ class UniPost:
     analytics: Analytics
     connect: Connect
     users: Users
+    profiles: Profiles
 
     def __init__(
         self,
@@ -61,3 +63,4 @@ class UniPost:
         self.analytics = Analytics(http)
         self.connect = Connect(http)
         self.users = Users(http)
+        self.profiles = Profiles(http)
