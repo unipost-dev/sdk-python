@@ -29,6 +29,7 @@ class SocialAccount:
     id: str
     platform: str
     profile_id: str = ""
+    profile_name: str = ""
     account_name: Optional[str] = None
     external_user_id: Optional[str] = None
     external_user_email: Optional[str] = None
