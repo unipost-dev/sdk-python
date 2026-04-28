@@ -109,7 +109,7 @@ class Posts:
         resp = self._http.get(f"/v1/posts/{post_id}/queue")
         return resp["data"]
 
-    def analytics(self, post_id: str, *, refresh: Optional[bool] = None) -> list[dict[str, Any]]:
+    def analytics(self, post_id: str, *, refresh: Optional[bool] = None) -> List[dict[str, Any]]:
         query: dict[str, Any] = {}
         if refresh:
             query["refresh"] = "true"
@@ -148,7 +148,7 @@ class Posts:
         resp = self._http.post(f"/v1/posts/{post_id}/results/{result_id}/retry")
         return _from_dict(PlatformResult, resp["data"])
 
-    def bulk_create(self, posts: List[dict[str, Any]]) -> list[dict[str, Any]]:
+    def bulk_create(self, posts: List[dict[str, Any]]) -> List[dict[str, Any]]:
         bodies = []
         for p in posts:
             body, _ = _to_snake_body(**p)

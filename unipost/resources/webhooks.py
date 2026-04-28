@@ -1,7 +1,7 @@
 """Webhook subscriptions resource."""
 
 from __future__ import annotations
-from typing import Any, Optional
+from typing import Any, List, Optional
 
 from unipost.types import WebhookSubscription, _from_dict
 
@@ -15,7 +15,7 @@ class Webhooks:
         *,
         name: str,
         url: str,
-        events: list[str],
+        events: List[str],
         active: Optional[bool] = None,
         secret: Optional[str] = None,
     ) -> WebhookSubscription:
@@ -42,7 +42,7 @@ class Webhooks:
         *,
         name: Optional[str] = None,
         url: Optional[str] = None,
-        events: Optional[list[str]] = None,
+        events: Optional[List[str]] = None,
         active: Optional[bool] = None,
     ) -> WebhookSubscription:
         body: dict[str, Any] = {}
