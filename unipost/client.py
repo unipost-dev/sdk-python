@@ -5,13 +5,22 @@ import os
 from typing import Optional
 
 from unipost.http import HttpClient, DEFAULT_BASE_URL, DEFAULT_TIMEOUT
+from unipost.resources.workspace import WorkspaceApi
+from unipost.resources.profiles import Profiles
 from unipost.resources.accounts import Accounts
+from unipost.resources.platforms import Platforms
+from unipost.resources.plans import Plans
+from unipost.resources.platform_credentials import PlatformCredentials
+from unipost.resources.api_keys import ApiKeys
 from unipost.resources.posts import Posts
+from unipost.resources.delivery_jobs import DeliveryJobs
 from unipost.resources.media import Media
 from unipost.resources.analytics import Analytics
 from unipost.resources.connect import Connect
 from unipost.resources.users import Users
-from unipost.resources.profiles import Profiles
+from unipost.resources.webhooks import Webhooks
+from unipost.resources.oauth import OAuth
+from unipost.resources.usage import UsageApi
 
 
 class UniPost:
@@ -29,13 +38,22 @@ class UniPost:
         )
     """
 
+    workspace: WorkspaceApi
+    profiles: Profiles
     accounts: Accounts
+    platforms: Platforms
+    plans: Plans
+    platform_credentials: PlatformCredentials
+    api_keys: ApiKeys
     posts: Posts
+    delivery_jobs: DeliveryJobs
     media: Media
     analytics: Analytics
     connect: Connect
     users: Users
-    profiles: Profiles
+    webhooks: Webhooks
+    oauth: OAuth
+    usage: UsageApi
 
     def __init__(
         self,
@@ -57,10 +75,19 @@ class UniPost:
             timeout=timeout or DEFAULT_TIMEOUT,
         )
 
+        self.workspace = WorkspaceApi(http)
+        self.profiles = Profiles(http)
         self.accounts = Accounts(http)
+        self.platforms = Platforms(http)
+        self.plans = Plans(http)
+        self.platform_credentials = PlatformCredentials(http)
+        self.api_keys = ApiKeys(http)
         self.posts = Posts(http)
+        self.delivery_jobs = DeliveryJobs(http)
         self.media = Media(http)
         self.analytics = Analytics(http)
         self.connect = Connect(http)
         self.users = Users(http)
-        self.profiles = Profiles(http)
+        self.webhooks = Webhooks(http)
+        self.oauth = OAuth(http)
+        self.usage = UsageApi(http)

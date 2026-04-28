@@ -4,11 +4,12 @@ from __future__ import annotations
 import os
 from typing import Any, Optional
 
-from unipost.errors import parse_api_error, RateLimitError
+from unipost.errors import parse_api_error
 
 DEFAULT_BASE_URL = "https://api.unipost.dev"
 DEFAULT_TIMEOUT = 30
 MAX_RETRIES = 2
+SDK_VERSION = "0.2.4"
 
 
 class AsyncHttpClient:
@@ -35,12 +36,12 @@ class AsyncHttpClient:
         req_headers = {
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
-            "User-Agent": "unipost-python/0.1.0",
+            "User-Agent": f"unipost-python/{SDK_VERSION}",
         }
         if headers:
             req_headers.update(headers)
 
-        params = {k: str(v) for k, v in (query or {}).items() if v is not None} or None
+        params = {k: str(v) for k, v in (query or {}).items() if v is not None and v != ""} or None
 
         last_error: Optional[Exception] = None
         for attempt in range(MAX_RETRIES + 1):
@@ -59,9 +60,9 @@ class AsyncHttpClient:
                 if resp.status_code == 429 and attempt < MAX_RETRIES:
                     retry_after = int(resp.headers.get("Retry-After", "1"))
                     await asyncio.sleep(retry_after)
-                    last_error = parse_api_error(resp.status_code, resp.json())
+                    last_error = parse_api_error(resp.status_code, _safe_json(resp))
                     continue
-                raise parse_api_error(resp.status_code, resp.json())
+                raise parse_api_error(resp.status_code, _safe_json(resp))
 
         raise last_error or Exception("Request failed after retries")
 
@@ -71,6 +72,9 @@ class AsyncHttpClient:
     async def post(self, path: str, body: Any = None, headers: Optional[dict[str, str]] = None) -> Any:
         return await self.request("POST", path, body=body, headers=headers)
 
+    async def patch(self, path: str, body: Any = None) -> Any:
+        return await self.request("PATCH", path, body=body)
+
     async def put(self, path: str, body: Any = None) -> Any:
         return await self.request("PUT", path, body=body)
 
@@ -78,7 +82,16 @@ class AsyncHttpClient:
         return await self.request("DELETE", path)
 
 
-# Async resource wrappers (mirror the sync API)
+def _safe_json(resp: Any) -> dict[str, Any]:
+    try:
+        return resp.json()
+    except Exception:
+        return {}
+
+
+# Async resource wrappers (mirror the sync API for the most-used resources).
+
+
 class _AsyncAccounts:
     def __init__(self, http: AsyncHttpClient) -> None:
         self._http = http
@@ -86,18 +99,20 @@ class _AsyncAccounts:
     async def list(self, **kwargs: Any) -> dict[str, Any]:
         from unipost.types import SocialAccount, _from_dict
         query: dict[str, Any] = {}
-        if kwargs.get("platform"):
-            query["platform"] = kwargs["platform"]
-        if kwargs.get("external_user_id"):
-            query["external_user_id"] = kwargs["external_user_id"]
-        resp = await self._http.get("/v1/social-accounts", query=query or None)
+        for k in ("platform", "external_user_id", "status", "profile_id"):
+            if kwargs.get(k):
+                query[k] = kwargs[k]
+        resp = await self._http.get("/v1/accounts", query=query or None)
         resp["data"] = [_from_dict(SocialAccount, a) for a in resp.get("data", [])]
         return resp
 
     async def get(self, account_id: str) -> Any:
-        from unipost.types import SocialAccount, _from_dict
-        resp = await self._http.get(f"/v1/social-accounts/{account_id}")
-        return _from_dict(SocialAccount, resp["data"])
+        from unipost.errors import NotFoundError
+        page = await self.list()
+        for account in page.get("data", []):
+            if getattr(account, "id", None) == account_id:
+                return account
+        raise NotFoundError("Account not found")
 
 
 class _AsyncPosts:
@@ -107,7 +122,7 @@ class _AsyncPosts:
     async def create(self, **kwargs: Any) -> Any:
         from unipost.resources.posts import _to_snake_body, _parse_post
         body, headers = _to_snake_body(**kwargs)
-        resp = await self._http.post("/v1/social-posts", body=body, headers=headers or None)
+        resp = await self._http.post("/v1/posts", body=body, headers=headers or None)
         return _parse_post(resp["data"])
 
     async def list(self, **kwargs: Any) -> dict[str, Any]:
@@ -120,24 +135,47 @@ class _AsyncPosts:
             query["from"] = kwargs["from_date"]
         if kwargs.get("to_date"):
             query["to"] = kwargs["to_date"]
-        resp = await self._http.get("/v1/social-posts", query=query or None)
+        resp = await self._http.get("/v1/posts", query=query or None)
         resp["data"] = [_parse_post(p) for p in resp.get("data", [])]
         return resp
 
     async def get(self, post_id: str) -> Any:
         from unipost.resources.posts import _parse_post
-        resp = await self._http.get(f"/v1/social-posts/{post_id}")
+        resp = await self._http.get(f"/v1/posts/{post_id}")
         return _parse_post(resp["data"])
 
     async def publish(self, post_id: str) -> Any:
         from unipost.resources.posts import _parse_post
-        resp = await self._http.post(f"/v1/social-posts/{post_id}/publish")
+        resp = await self._http.post(f"/v1/posts/{post_id}/publish")
         return _parse_post(resp["data"])
 
     async def cancel(self, post_id: str) -> Any:
         from unipost.resources.posts import _parse_post
-        resp = await self._http.post(f"/v1/social-posts/{post_id}/cancel")
+        resp = await self._http.post(f"/v1/posts/{post_id}/cancel")
         return _parse_post(resp["data"])
+
+
+class _AsyncApiKeys:
+    def __init__(self, http: AsyncHttpClient) -> None:
+        self._http = http
+
+    async def list(self) -> dict[str, Any]:
+        from unipost.types import ApiKey, _from_dict
+        resp = await self._http.get("/v1/api-keys")
+        resp["data"] = [_from_dict(ApiKey, k) for k in resp.get("data", [])]
+        return resp
+
+    async def create(self, **kwargs: Any) -> Any:
+        from unipost.types import CreatedApiKey, _from_dict
+        body: dict[str, Any] = {}
+        for k in ("name", "environment", "expires_at"):
+            if kwargs.get(k) is not None:
+                body[k] = kwargs[k]
+        resp = await self._http.post("/v1/api-keys", body=body)
+        return _from_dict(CreatedApiKey, resp["data"])
+
+    async def revoke(self, key_id: str) -> None:
+        await self._http.delete(f"/v1/api-keys/{key_id}")
 
 
 class AsyncUniPost:
@@ -178,3 +216,4 @@ class AsyncUniPost:
 
         self.accounts = _AsyncAccounts(http)
         self.posts = _AsyncPosts(http)
+        self.api_keys = _AsyncApiKeys(http)

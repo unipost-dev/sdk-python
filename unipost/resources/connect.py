@@ -16,20 +16,22 @@ class Connect:
         platform: str,
         external_user_id: str,
         external_user_email: Optional[str] = None,
-        return_url: str,
+        return_url: Optional[str] = None,
+        profile_id: Optional[str] = None,
     ) -> ConnectSession:
-        """Create a Connect session for end-user OAuth."""
         body: dict[str, Any] = {
             "platform": platform,
             "external_user_id": external_user_id,
-            "return_url": return_url,
         }
         if external_user_email:
             body["external_user_email"] = external_user_email
+        if return_url:
+            body["return_url"] = return_url
+        if profile_id:
+            body["profile_id"] = profile_id
         resp = self._http.post("/v1/connect/sessions", body=body)
         return _from_dict(ConnectSession, resp["data"])
 
     def get_session(self, session_id: str) -> ConnectSession:
-        """Get the status of a Connect session."""
         resp = self._http.get(f"/v1/connect/sessions/{session_id}")
         return _from_dict(ConnectSession, resp["data"])

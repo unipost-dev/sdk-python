@@ -66,9 +66,11 @@ class QuotaError(UniPostError):
 
 def parse_api_error(status: int, body: dict[str, Any]) -> UniPostError:
     """Parse an API error response into the appropriate error class."""
-    error = body.get("error", {})
-    msg = error.get("message", "Unknown API error")
-    code = error.get("code", "unknown")
+    error = body.get("error") if isinstance(body, dict) else {}
+    if not isinstance(error, dict):
+        error = {}
+    msg = error.get("message", f"HTTP {status}")
+    code = error.get("normalized_code") or error.get("code", "unknown")
 
     if status == 401:
         return AuthError(msg)
@@ -77,7 +79,8 @@ def parse_api_error(status: int, body: dict[str, Any]) -> UniPostError:
     if status == 422:
         return ValidationError(msg, error.get("errors"))
     if status == 429:
-        return RateLimitError(message=msg)
+        retry_after = int(error.get("retry_after", 1) or 1)
+        return RateLimitError(retry_after=retry_after, message=msg)
     if status == 403 and code == "quota_exceeded":
         return QuotaError(msg)
     if status == 502 and error.get("platform"):

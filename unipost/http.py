@@ -10,11 +10,12 @@ from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 from urllib.parse import urlencode
 
-from unipost.errors import parse_api_error, RateLimitError
+from unipost.errors import parse_api_error
 
 DEFAULT_BASE_URL = "https://api.unipost.dev"
 DEFAULT_TIMEOUT = 30
 MAX_RETRIES = 2
+SDK_VERSION = "0.2.4"
 
 
 def _default_ssl_context() -> ssl.SSLContext:
@@ -32,7 +33,7 @@ def _default_ssl_context() -> ssl.SSLContext:
 
 
 class HttpClient:
-    """Sync HTTP client using urllib (zero dependencies)."""
+    """Sync HTTP client using urllib (zero hard dependencies beyond certifi)."""
 
     def __init__(self, api_key: str, base_url: str, timeout: int) -> None:
         self._api_key = api_key
@@ -51,14 +52,14 @@ class HttpClient:
     ) -> Any:
         url = f"{self._base_url}{path}"
         if query:
-            filtered = {k: str(v) for k, v in query.items() if v is not None}
+            filtered = {k: str(v) for k, v in query.items() if v is not None and v != ""}
             if filtered:
                 url += "?" + urlencode(filtered)
 
         req_headers = {
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
-            "User-Agent": "unipost-python/0.1.0",
+            "User-Agent": f"unipost-python/{SDK_VERSION}",
         }
         if headers:
             req_headers.update(headers)
@@ -72,9 +73,13 @@ class HttpClient:
                 with urlopen(req, timeout=self._timeout, context=self._ssl_ctx) as resp:
                     if resp.status == 204:
                         return None
-                    return json.loads(resp.read().decode("utf-8"))
+                    raw = resp.read().decode("utf-8")
+                    return json.loads(raw) if raw else None
             except HTTPError as e:
-                resp_body = json.loads(e.read().decode("utf-8")) if e.fp else {}
+                try:
+                    resp_body = json.loads(e.read().decode("utf-8")) if e.fp else {}
+                except Exception:
+                    resp_body = {}
                 if e.code == 429 and attempt < MAX_RETRIES:
                     retry_after = int(e.headers.get("Retry-After", "1"))
                     time.sleep(retry_after)
@@ -94,6 +99,9 @@ class HttpClient:
         headers: Optional[dict[str, str]] = None,
     ) -> Any:
         return self.request("POST", path, body=body, headers=headers)
+
+    def patch(self, path: str, body: Any = None) -> Any:
+        return self.request("PATCH", path, body=body)
 
     def put(self, path: str, body: Any = None) -> Any:
         return self.request("PUT", path, body=body)

@@ -13,18 +13,30 @@ from unipost.errors import (
 )
 from unipost.webhook import verify_webhook_signature
 from unipost.types import (
+    Workspace,
     SocialAccount,
     Profile,
     Post,
     PlatformResult,
+    AccountHealth,
     ConnectSession,
     ManagedUser,
     PostAnalytics,
+    PostAnalyticsItem,
     AnalyticsRollup,
+    ApiKey,
+    CreatedApiKey,
+    PlatformCredential,
+    WebhookSubscription,
+    DeliveryJob,
+    Plan,
+    Usage,
+    MediaUploadResponse,
 )
 from unipost.resources.profiles import Profiles
+from unipost.resources.api_keys import ApiKeys
 
-__version__ = "0.2.0"
+__version__ = "0.2.4"
 __all__ = [
     "UniPost",
     "AsyncUniPost",
@@ -36,13 +48,25 @@ __all__ = [
     "PlatformError",
     "QuotaError",
     "verify_webhook_signature",
+    "Workspace",
     "SocialAccount",
     "Profile",
     "Profiles",
     "Post",
     "PlatformResult",
+    "AccountHealth",
     "ConnectSession",
     "ManagedUser",
     "PostAnalytics",
+    "PostAnalyticsItem",
     "AnalyticsRollup",
+    "ApiKey",
+    "ApiKeys",
+    "CreatedApiKey",
+    "PlatformCredential",
+    "WebhookSubscription",
+    "DeliveryJob",
+    "Plan",
+    "Usage",
+    "MediaUploadResponse",
 ]
