@@ -36,7 +36,7 @@ from unipost.types import (
 from unipost.resources.profiles import Profiles
 from unipost.resources.api_keys import ApiKeys
 
-__version__ = "0.2.4"
+__version__ = "0.2.5"
 __all__ = [
     "UniPost",
     "AsyncUniPost",
