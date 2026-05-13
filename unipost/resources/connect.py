@@ -17,13 +17,13 @@ class Connect:
         platform: str,
         redirect_url: Optional[str] = None,
     ) -> OAuthConnectResponse:
-        query: dict[str, Any] = {}
+        body: dict[str, Any] = {
+            "profile_id": profile_id,
+            "platform": platform,
+        }
         if redirect_url is not None:
-            query["redirect_url"] = redirect_url
-        resp = self._http.get(
-            f"/v1/profiles/{profile_id}/oauth/connect/{platform}",
-            query=query or None,
-        )
+            body["redirect_url"] = redirect_url
+        resp = self._http.post("/v1/oauth/connect", body=body)
         return _from_dict(OAuthConnectResponse, resp["data"])
 
     def create_session(

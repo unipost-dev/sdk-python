@@ -15,8 +15,8 @@ class OAuth:
         redirect_url: Optional[str] = None,
     ) -> dict[str, Any]:
         """Get the auth URL to redirect the user to for the given platform."""
-        query: dict[str, Any] = {}
+        body: dict[str, Any] = {"platform": platform}
         if redirect_url is not None:
-            query["redirect_url"] = redirect_url
-        resp = self._http.get(f"/v1/oauth/connect/{platform}", query=query or None)
+            body["redirect_url"] = redirect_url
+        resp = self._http.post("/v1/oauth/connect", body=body)
         return resp["data"]
