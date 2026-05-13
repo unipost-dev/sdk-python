@@ -98,6 +98,19 @@ connect = client.connect.get_connect_url(
 print(connect.auth_url)
 ```
 
+### Connect (Managed Users)
+
+```python
+session = client.connect.create_session(
+    platform="twitter",
+    external_user_id="your_user_123",
+    return_url="https://yourapp.com/callback",
+    allow_quickstart_creds=True,  # optional
+)
+
+print(session.url)
+```
+
 ### Webhook Verification
 
 ```python

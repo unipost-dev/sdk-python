@@ -119,6 +119,7 @@ class AccountHealth:
 class ConnectSession:
     id: str
     url: str = ""
+    allow_quickstart_creds: bool = False
     status: str = ""
     expires_at: str = ""
     platform: str = ""

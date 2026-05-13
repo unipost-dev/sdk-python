@@ -15,7 +15,7 @@ from unipost.errors import parse_api_error
 DEFAULT_BASE_URL = "https://api.unipost.dev"
 DEFAULT_TIMEOUT = 30
 MAX_RETRIES = 2
-SDK_VERSION = "0.2.5"
+SDK_VERSION = "0.2.9"
 
 
 def _default_ssl_context() -> ssl.SSLContext:

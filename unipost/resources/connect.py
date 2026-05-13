@@ -34,6 +34,7 @@ class Connect:
         external_user_email: Optional[str] = None,
         return_url: Optional[str] = None,
         profile_id: Optional[str] = None,
+        allow_quickstart_creds: Optional[bool] = None,
     ) -> ConnectSession:
         body: dict[str, Any] = {
             "platform": platform,
@@ -45,6 +46,8 @@ class Connect:
             body["return_url"] = return_url
         if profile_id:
             body["profile_id"] = profile_id
+        if allow_quickstart_creds is not None:
+            body["allow_quickstart_creds"] = allow_quickstart_creds
         resp = self._http.post("/v1/connect/sessions", body=body)
         return _from_dict(ConnectSession, resp["data"])
 
