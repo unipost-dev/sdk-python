@@ -86,6 +86,18 @@ async def main():
     )
 ```
 
+### Get Connect URL (Your Own Accounts)
+
+```python
+connect = client.connect.get_connect_url(
+    profile_id="pr_brand_us",
+    platform="linkedin",
+    redirect_url="https://app.acme.com/integrations/done",  # optional
+)
+
+print(connect.auth_url)
+```
+
 ### Webhook Verification
 
 ```python

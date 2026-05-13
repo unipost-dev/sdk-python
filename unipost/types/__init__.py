@@ -131,6 +131,11 @@ class ConnectSession:
 
 
 @dataclass
+class OAuthConnectResponse:
+    auth_url: str = ""
+
+
+@dataclass
 class ManagedUser:
     external_user_id: str
     external_user_email: Optional[str] = None

@@ -20,6 +20,7 @@ from unipost.types import (
     PlatformResult,
     AccountHealth,
     ConnectSession,
+    OAuthConnectResponse,
     ManagedUser,
     PostAnalytics,
     PostAnalyticsItem,
@@ -36,7 +37,7 @@ from unipost.types import (
 from unipost.resources.profiles import Profiles
 from unipost.resources.api_keys import ApiKeys
 
-__version__ = "0.2.5"
+__version__ = "0.2.8"
 __all__ = [
     "UniPost",
     "AsyncUniPost",
@@ -56,6 +57,7 @@ __all__ = [
     "PlatformResult",
     "AccountHealth",
     "ConnectSession",
+    "OAuthConnectResponse",
     "ManagedUser",
     "PostAnalytics",
     "PostAnalyticsItem",

@@ -3,12 +3,28 @@
 from __future__ import annotations
 from typing import Any, Optional
 
-from unipost.types import ConnectSession, _from_dict
+from unipost.types import ConnectSession, OAuthConnectResponse, _from_dict
 
 
 class Connect:
     def __init__(self, http: Any) -> None:
         self._http = http
+
+    def get_connect_url(
+        self,
+        *,
+        profile_id: str,
+        platform: str,
+        redirect_url: Optional[str] = None,
+    ) -> OAuthConnectResponse:
+        query: dict[str, Any] = {}
+        if redirect_url is not None:
+            query["redirect_url"] = redirect_url
+        resp = self._http.get(
+            f"/v1/profiles/{profile_id}/oauth/connect/{platform}",
+            query=query or None,
+        )
+        return _from_dict(OAuthConnectResponse, resp["data"])
 
     def create_session(
         self,
