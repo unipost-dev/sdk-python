@@ -9,7 +9,7 @@ from unipost.errors import parse_api_error
 DEFAULT_BASE_URL = "https://api.unipost.dev"
 DEFAULT_TIMEOUT = 30
 MAX_RETRIES = 2
-SDK_VERSION = "0.2.9"
+SDK_VERSION = "0.3.0"
 
 
 class AsyncHttpClient:
