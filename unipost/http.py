@@ -89,8 +89,52 @@ class HttpClient:
 
         raise last_error or Exception("Request failed after retries")
 
+    def request_text(
+        self,
+        method: str,
+        path: str,
+        *,
+        query: Optional[dict[str, Any]] = None,
+        headers: Optional[dict[str, str]] = None,
+    ) -> str:
+        url = f"{self._base_url}{path}"
+        if query:
+            filtered = {k: str(v) for k, v in query.items() if v is not None and v != ""}
+            if filtered:
+                url += "?" + urlencode(filtered)
+
+        req_headers = {
+            "Authorization": f"Bearer {self._api_key}",
+            "User-Agent": f"unipost-python/{SDK_VERSION}",
+        }
+        if headers:
+            req_headers.update(headers)
+
+        last_error: Optional[Exception] = None
+        for attempt in range(MAX_RETRIES + 1):
+            try:
+                req = Request(url, headers=req_headers, method=method)
+                with urlopen(req, timeout=self._timeout, context=self._ssl_ctx) as resp:
+                    return resp.read().decode("utf-8")
+            except HTTPError as e:
+                try:
+                    resp_body = json.loads(e.read().decode("utf-8")) if e.fp else {}
+                except Exception:
+                    resp_body = {}
+                if e.code == 429 and attempt < MAX_RETRIES:
+                    retry_after = int(e.headers.get("Retry-After", "1"))
+                    time.sleep(retry_after)
+                    last_error = parse_api_error(e.code, resp_body)
+                    continue
+                raise parse_api_error(e.code, resp_body) from e
+
+        raise last_error or Exception("Request failed after retries")
+
     def get(self, path: str, query: Optional[dict[str, Any]] = None) -> Any:
         return self.request("GET", path, query=query)
+
+    def get_text(self, path: str, query: Optional[dict[str, Any]] = None) -> str:
+        return self.request_text("GET", path, query=query)
 
     def post(
         self,

@@ -73,6 +73,25 @@ draft = client.posts.create(
 )
 ```
 
+### Analytics Explorer
+
+```python
+posts = client.analytics.posts(
+    platform="tiktok",
+    limit=25,
+    sort="engagement_rate",
+)
+
+platforms = client.analytics.platforms()
+tiktok = client.analytics.platform("tiktok")
+csv = client.analytics.export_posts_csv(platform="pinterest")
+
+client.analytics.refresh(
+    platform="threads",
+    limit=100,
+)
+```
+
 ### Async
 
 ```python
