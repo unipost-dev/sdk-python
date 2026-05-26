@@ -3,6 +3,17 @@
 Official UniPost API client for Python.
 Post to 7 social platforms with one API call.
 
+## Latest release: v0.3.0
+
+Analytics Explorer APIs are now available in this SDK.
+
+- Query post-level analytics with filters and sorting.
+- Export analytics rows as CSV for reporting workflows.
+- Inspect platform analytics availability and metric summaries.
+- Trigger analytics refresh jobs for supported platforms.
+
+Supported analytics surfaces include Instagram, Threads, Pinterest, and TikTok when connected account permissions allow them. See `Analytics Explorer` below for code.
+
 ## Installation
 
 ```bash
