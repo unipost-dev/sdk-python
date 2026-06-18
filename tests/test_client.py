@@ -22,6 +22,7 @@ def test_accepts_explicit_api_key():
     assert client.analytics is not None
     assert client.connect is not None
     assert client.users is not None
+    assert client.logs is not None
 
 
 def test_async_requires_api_key():
@@ -38,3 +39,4 @@ def test_async_accepts_explicit_api_key():
     client = AsyncUniPost(api_key="up_test_xxx")
     assert client.posts is not None
     assert client.accounts is not None
+    assert client.logs is not None

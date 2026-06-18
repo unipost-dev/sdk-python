@@ -21,6 +21,7 @@ from unipost.resources.users import Users
 from unipost.resources.webhooks import Webhooks
 from unipost.resources.oauth import OAuth
 from unipost.resources.usage import UsageApi
+from unipost.resources.logs import Logs
 
 
 class UniPost:
@@ -54,6 +55,7 @@ class UniPost:
     webhooks: Webhooks
     oauth: OAuth
     usage: UsageApi
+    logs: Logs
 
     def __init__(
         self,
@@ -91,3 +93,4 @@ class UniPost:
         self.webhooks = Webhooks(http)
         self.oauth = OAuth(http)
         self.usage = UsageApi(http)
+        self.logs = Logs(http)

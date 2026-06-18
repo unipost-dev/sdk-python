@@ -5,12 +5,14 @@ Post to 7 social platforms with one API call.
 
 ## Latest release: v0.3.0
 
-Analytics Explorer APIs are now available in this SDK.
+Analytics Explorer and Developer Logs APIs are now available in this SDK.
 
 - Query post-level analytics with filters and sorting.
 - Export analytics rows as CSV for reporting workflows.
 - Inspect platform analytics availability and metric summaries.
 - Trigger analytics refresh jobs for supported platforms.
+- Backfill workspace developer logs with cursor pagination.
+- Stream near-real-time logs with Server-Sent Events replay.
 
 Supported analytics surfaces include Instagram, Threads, Pinterest, and TikTok when connected account permissions allow them. See `Analytics Explorer` below for code.
 
@@ -101,6 +103,20 @@ client.analytics.refresh(
     platform="threads",
     limit=100,
 )
+```
+
+### Developer Logs
+
+```python
+page = client.logs.list(status="error", limit=50)
+
+if page["data"]:
+    log = client.logs.get(page["data"][0]["id"])
+    print(log["action"], log.get("request_payload"))
+
+for log in client.logs.stream(status="error", after_id=page["data"][0]["id"] if page["data"] else 0):
+    print(log["id"], log["action"])
+    break
 ```
 
 ### Async

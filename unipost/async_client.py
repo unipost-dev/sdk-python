@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 import os
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 from unipost.errors import parse_api_error
 
@@ -80,6 +80,38 @@ class AsyncHttpClient:
 
     async def delete(self, path: str) -> Any:
         return await self.request("DELETE", path)
+
+    async def stream(
+        self,
+        path: str,
+        *,
+        query: Optional[dict[str, Any]] = None,
+        headers: Optional[dict[str, str]] = None,
+    ):
+        import httpx
+
+        url = f"{self._base_url}{path}"
+        req_headers = {
+            "Authorization": f"Bearer {self._api_key}",
+            "User-Agent": f"unipost-python/{SDK_VERSION}",
+            "Accept": "text/event-stream",
+        }
+        if headers:
+            req_headers.update(headers)
+        params = {k: str(v) for k, v in (query or {}).items() if v is not None and v != ""} or None
+
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            async with client.stream("GET", url, headers=req_headers, params=params) as resp:
+                if resp.is_error:
+                    text = await resp.aread()
+                    try:
+                        import json
+                        body = json.loads(text.decode("utf-8")) if text else {}
+                    except Exception:
+                        body = {}
+                    raise parse_api_error(resp.status_code, body)
+                async for line in resp.aiter_lines():
+                    yield line
 
 
 def _safe_json(resp: Any) -> dict[str, Any]:
@@ -178,6 +210,58 @@ class _AsyncApiKeys:
         await self._http.delete(f"/v1/api-keys/{key_id}")
 
 
+class _AsyncLogs:
+    def __init__(self, http: AsyncHttpClient) -> None:
+        self._http = http
+
+    async def list(self, **kwargs: Any) -> dict[str, Any]:
+        from unipost.resources.logs import _query
+
+        resp = await self._http.get("/v1/logs", query=_query(**kwargs) or None)
+        meta = resp.get("meta") or {}
+        resp["next_cursor"] = meta.get("next_cursor") or resp.get("next_cursor")
+        return resp
+
+    async def get(self, log_id: Union[int, str]) -> dict[str, Any]:
+        resp = await self._http.get(f"/v1/logs/{log_id}")
+        return resp["data"]
+
+    async def stream(self, **kwargs: Any):
+        import json
+        from unipost.resources.logs import _query
+
+        last_event_id = kwargs.pop("last_event_id", None)
+        headers = {"Accept": "text/event-stream"}
+        if last_event_id is not None:
+            headers["Last-Event-ID"] = str(last_event_id)
+
+        event_name = None
+        data_lines: list[str] = []
+
+        async for raw_line in self._http.stream("/v1/logs/stream", query=_query(**kwargs) or None, headers=headers):
+            line = raw_line.rstrip("\r\n")
+            if line == "":
+                if data_lines:
+                    raw = "\n".join(data_lines)
+                    data_lines = []
+                    if not event_name or event_name == "log.created":
+                        yield json.loads(raw)
+                    event_name = None
+                continue
+            if line.startswith(":"):
+                continue
+            field, _, value = line.partition(":")
+            if value.startswith(" "):
+                value = value[1:]
+            if field == "event":
+                event_name = value
+            elif field == "data":
+                data_lines.append(value)
+
+        if data_lines and (not event_name or event_name == "log.created"):
+            yield json.loads("\n".join(data_lines))
+
+
 class AsyncUniPost:
     """
     Official UniPost API client (asynchronous, requires httpx).
@@ -217,3 +301,4 @@ class AsyncUniPost:
         self.accounts = _AsyncAccounts(http)
         self.posts = _AsyncPosts(http)
         self.api_keys = _AsyncApiKeys(http)
+        self.logs = _AsyncLogs(http)

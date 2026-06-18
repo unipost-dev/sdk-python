@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import ssl
 import time
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 from urllib.parse import urlencode
@@ -135,6 +135,42 @@ class HttpClient:
 
     def get_text(self, path: str, query: Optional[dict[str, Any]] = None) -> str:
         return self.request_text("GET", path, query=query)
+
+    def stream(
+        self,
+        path: str,
+        *,
+        query: Optional[dict[str, Any]] = None,
+        headers: Optional[dict[str, str]] = None,
+    ) -> Iterator[str]:
+        url = f"{self._base_url}{path}"
+        if query:
+            filtered = {k: str(v) for k, v in query.items() if v is not None and v != ""}
+            if filtered:
+                url += "?" + urlencode(filtered)
+
+        req_headers = {
+            "Authorization": f"Bearer {self._api_key}",
+            "User-Agent": f"unipost-python/{SDK_VERSION}",
+            "Accept": "text/event-stream",
+        }
+        if headers:
+            req_headers.update(headers)
+
+        try:
+            req = Request(url, headers=req_headers, method="GET")
+            with urlopen(req, timeout=self._timeout, context=self._ssl_ctx) as resp:
+                while True:
+                    raw = resp.readline()
+                    if not raw:
+                        break
+                    yield raw.decode("utf-8")
+        except HTTPError as e:
+            try:
+                resp_body = json.loads(e.read().decode("utf-8")) if e.fp else {}
+            except Exception:
+                resp_body = {}
+            raise parse_api_error(e.code, resp_body) from e
 
     def post(
         self,
