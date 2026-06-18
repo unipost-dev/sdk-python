@@ -38,7 +38,7 @@ from unipost.resources.profiles import Profiles
 from unipost.resources.api_keys import ApiKeys
 from unipost.resources.logs import Logs
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 __all__ = [
     "UniPost",
     "AsyncUniPost",
