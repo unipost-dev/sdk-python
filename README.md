@@ -3,7 +3,7 @@
 Official UniPost API client for Python.
 Post to 7 social platforms with one API call.
 
-## Latest release: v0.3.0
+## Latest release: v0.4.0
 
 Analytics Explorer and Developer Logs APIs are now available in this SDK.
 
