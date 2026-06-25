@@ -18,6 +18,8 @@ from unipost.types import (
     Profile,
     Post,
     PlatformResult,
+    ProviderError,
+    RetryPolicy,
     AccountHealth,
     ConnectSession,
     OAuthConnectResponse,
@@ -38,7 +40,7 @@ from unipost.resources.profiles import Profiles
 from unipost.resources.api_keys import ApiKeys
 from unipost.resources.logs import Logs
 
-__version__ = "0.4.0"
+__version__ = "0.4.1"
 __all__ = [
     "UniPost",
     "AsyncUniPost",
@@ -56,6 +58,8 @@ __all__ = [
     "Profiles",
     "Post",
     "PlatformResult",
+    "ProviderError",
+    "RetryPolicy",
     "AccountHealth",
     "ConnectSession",
     "OAuthConnectResponse",

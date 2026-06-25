@@ -3,13 +3,22 @@
 from __future__ import annotations
 from typing import Any, Generator, List, Optional
 
-from unipost.types import Post, PlatformResult, _from_dict
+from unipost.types import Post, PlatformResult, ProviderError, RetryPolicy, _from_dict
+
+
+def _parse_platform_result(data: dict[str, Any]) -> PlatformResult:
+    result = _from_dict(PlatformResult, data)
+    if isinstance(data.get("provider_error"), dict):
+        result.provider_error = _from_dict(ProviderError, data["provider_error"])
+    if isinstance(data.get("retry_policy"), dict):
+        result.retry_policy = _from_dict(RetryPolicy, data["retry_policy"])
+    return result
 
 
 def _parse_post(data: dict[str, Any]) -> Post:
     post = _from_dict(Post, data)
     if data.get("results"):
-        post.results = [_from_dict(PlatformResult, r) for r in data["results"]]
+        post.results = [_parse_platform_result(r) for r in data["results"]]
     return post
 
 
@@ -146,7 +155,7 @@ class Posts:
 
     def retry_result(self, post_id: str, result_id: str) -> PlatformResult:
         resp = self._http.post(f"/v1/posts/{post_id}/results/{result_id}/retry")
-        return _from_dict(PlatformResult, resp["data"])
+        return _parse_platform_result(resp["data"])
 
     def bulk_create(self, posts: List[dict[str, Any]]) -> List[dict[str, Any]]:
         bodies = []

@@ -3,16 +3,13 @@
 Official UniPost API client for Python.
 Post to 7 social platforms with one API call.
 
-## Latest release: v0.4.0
+## Latest release: v0.4.1
 
-Analytics Explorer and Developer Logs APIs are now available in this SDK.
+Post failure responses now include typed error contract fields.
 
-- Query post-level analytics with filters and sorting.
-- Export analytics rows as CSV for reporting workflows.
-- Inspect platform analytics availability and metric summaries.
-- Trigger analytics refresh jobs for supported platforms.
-- Backfill workspace developer logs with cursor pagination.
-- Stream near-real-time logs with Server-Sent Events replay.
+- Read `error_source` and `error_temporality` to distinguish UniPost, worker, platform, and unknown failures.
+- Inspect sanitized `provider_error` details when a platform returns structured metadata.
+- Use `retry_policy.will_retry` and `retry_policy.manual_retry_allowed` instead of parsing `error_message`.
 
 Supported analytics surfaces include Instagram, Threads, Pinterest, and TikTok when connected account permissions allow them. See `Analytics Explorer` below for code.
 
