@@ -39,4 +39,5 @@ def test_async_accepts_explicit_api_key():
     client = AsyncUniPost(api_key="up_test_xxx")
     assert client.posts is not None
     assert client.accounts is not None
+    assert client.media is not None
     assert client.logs is not None

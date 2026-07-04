@@ -35,12 +35,14 @@ from unipost.types import (
     Plan,
     Usage,
     MediaUploadResponse,
+    AudioOverlayError,
+    AudioOverlayJob,
 )
 from unipost.resources.profiles import Profiles
 from unipost.resources.api_keys import ApiKeys
 from unipost.resources.logs import Logs
 
-__version__ = "0.4.1"
+__version__ = "0.5.0"
 __all__ = [
     "UniPost",
     "AsyncUniPost",
@@ -77,4 +79,6 @@ __all__ = [
     "Plan",
     "Usage",
     "MediaUploadResponse",
+    "AudioOverlayError",
+    "AudioOverlayJob",
 ]

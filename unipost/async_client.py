@@ -9,7 +9,7 @@ from unipost.errors import parse_api_error
 DEFAULT_BASE_URL = "https://api.unipost.dev"
 DEFAULT_TIMEOUT = 30
 MAX_RETRIES = 2
-SDK_VERSION = "0.4.1"
+SDK_VERSION = "0.5.0"
 
 
 class AsyncHttpClient:
@@ -187,6 +187,84 @@ class _AsyncPosts:
         return _parse_post(resp["data"])
 
 
+class _AsyncAudioOverlays:
+    def __init__(self, http: AsyncHttpClient) -> None:
+        self._http = http
+
+    async def create(
+        self,
+        *,
+        video_media_id: str,
+        audio_media_id: str,
+        mode: Optional[str] = None,
+        video_volume: Optional[int] = None,
+        audio_volume: Optional[int] = None,
+        audio_start_ms: Optional[int] = None,
+        fit: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
+    ) -> Any:
+        from unipost.resources.media import _normalize_audio_overlay
+
+        body: dict[str, Any] = {
+            "video_media_id": video_media_id,
+            "audio_media_id": audio_media_id,
+        }
+        for key, value in {
+            "mode": mode,
+            "video_volume": video_volume,
+            "audio_volume": audio_volume,
+            "audio_start_ms": audio_start_ms,
+            "fit": fit,
+        }.items():
+            if value is not None:
+                body[key] = value
+        headers = {"Idempotency-Key": idempotency_key} if idempotency_key else None
+        resp = await self._http.post("/v1/media/audio-overlays", body=body, headers=headers)
+        return _normalize_audio_overlay(resp["data"])
+
+    async def get(self, job_id: str) -> Any:
+        from unipost.resources.media import _normalize_audio_overlay
+
+        resp = await self._http.get(f"/v1/media/audio-overlays/{job_id}")
+        return _normalize_audio_overlay(resp["data"])
+
+
+class _AsyncMedia:
+    def __init__(self, http: AsyncHttpClient) -> None:
+        self._http = http
+        self.audio_overlays = _AsyncAudioOverlays(http)
+
+    async def upload(
+        self,
+        *,
+        filename: str,
+        content_type: str,
+        size_bytes: Optional[int] = None,
+        content_hash: Optional[str] = None,
+    ) -> Any:
+        from unipost.resources.media import _normalize
+
+        body: dict[str, Any] = {
+            "filename": filename,
+            "content_type": content_type,
+        }
+        if size_bytes is not None:
+            body["size_bytes"] = size_bytes
+        if content_hash is not None:
+            body["content_hash"] = content_hash
+        resp = await self._http.post("/v1/media", body=body)
+        return _normalize(resp["data"])
+
+    async def get(self, media_id: str) -> Any:
+        from unipost.resources.media import _normalize
+
+        resp = await self._http.get(f"/v1/media/{media_id}")
+        return _normalize(resp["data"])
+
+    async def delete(self, media_id: str) -> None:
+        await self._http.delete(f"/v1/media/{media_id}")
+
+
 class _AsyncApiKeys:
     def __init__(self, http: AsyncHttpClient) -> None:
         self._http = http
@@ -300,5 +378,6 @@ class AsyncUniPost:
 
         self.accounts = _AsyncAccounts(http)
         self.posts = _AsyncPosts(http)
+        self.media = _AsyncMedia(http)
         self.api_keys = _AsyncApiKeys(http)
         self.logs = _AsyncLogs(http)

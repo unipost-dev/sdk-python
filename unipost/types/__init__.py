@@ -200,6 +200,28 @@ class MediaUploadResponse:
 
 
 @dataclass
+class AudioOverlayError:
+    code: str = ""
+    message: str = ""
+    retryable: bool = False
+
+
+@dataclass
+class AudioOverlayJob:
+    id: str
+    status: str = ""
+    video_media_id: str = ""
+    audio_media_id: str = ""
+    output_media_id: Optional[str] = None
+    mode: str = ""
+    fit: str = ""
+    created_at: str = ""
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    error: Optional[AudioOverlayError] = None
+
+
+@dataclass
 class PostAnalyticsItem:
     post_id: str = ""
     social_account_id: str = ""
