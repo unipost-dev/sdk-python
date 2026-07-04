@@ -3,16 +3,14 @@
 Official UniPost API client for Python.
 Post to 7 social platforms with one API call.
 
-## Latest release: v0.4.0
+## Latest release: v0.5.0
 
-Analytics Explorer and Developer Logs APIs are now available in this SDK.
+Media uploads now support custom audio overlay jobs and optional reserve-time file sizes.
 
-- Query post-level analytics with filters and sorting.
-- Export analytics rows as CSV for reporting workflows.
-- Inspect platform analytics availability and metric summaries.
-- Trigger analytics refresh jobs for supported platforms.
-- Backfill workspace developer logs with cursor pagination.
-- Stream near-real-time logs with Server-Sent Events replay.
+- Use `client.media.audio_overlays.create(...)` to combine one uploaded video with one uploaded audio file.
+- Poll the job with `client.media.audio_overlays.get(...)`, then publish the returned `output_media_id`.
+- Omit `size_bytes` when reserving media if your app cannot know the raw file length up front.
+- Post failure responses also include the typed v0.4.1 error contract fields.
 
 Supported analytics surfaces include Instagram, Threads, Pinterest, and TikTok when connected account permissions allow them. See `Analytics Explorer` below for code.
 
@@ -117,6 +115,45 @@ if page["data"]:
 for log in client.logs.stream(status="error", after_id=page["data"][0]["id"] if page["data"] else 0):
     print(log["id"], log["action"])
     break
+```
+
+### Media Upload
+
+```python
+reserved = client.media.upload(
+    filename="voiceover.mp3",
+    content_type="audio/mpeg",
+    # size_bytes is optional; upload_file calculates it automatically
+)
+```
+
+### Custom Audio Overlay
+
+```python
+from time import sleep
+
+job = client.media.audio_overlays.create(
+    video_media_id="media_video_123",
+    audio_media_id="media_audio_456",
+    mode="mix",
+    video_volume=70,
+    audio_volume=100,
+    fit="trim_to_video",
+    idempotency_key="overlay-demo-001",
+)
+
+while job.status in ("queued", "processing"):
+    sleep(1.5)
+    job = client.media.audio_overlays.get(job.id)
+
+if job.status != "succeeded":
+    raise RuntimeError(job.error.message if job.error else "audio overlay failed")
+
+client.posts.create(
+    caption="Video with custom audio",
+    account_ids=["sa_tiktok_xxx"],
+    media_ids=[job.output_media_id],
+)
 ```
 
 ### Async

@@ -35,6 +35,16 @@ PostStatus = Literal[
 ]
 PublishMode = Literal["now", "schedule", "queue", "draft"]
 ApiKeyEnvironment = Literal["production", "test"]
+ErrorSource = Literal["unipost", "platform", "worker", "unknown"]
+ErrorTemporality = Literal["temporary", "permanent", "unknown"]
+RetryState = Literal[
+    "not_retriable",
+    "scheduled",
+    "running",
+    "exhausted",
+    "manual_only",
+    "unknown",
+]
 
 
 @dataclass
@@ -74,6 +84,33 @@ class SocialAccount:
 
 
 @dataclass
+class ProviderError:
+    provider: Optional[str] = None
+    http_status: Optional[int] = None
+    code: Optional[str] = None
+    subcode: Optional[str] = None
+    type: Optional[str] = None
+    reason: Optional[str] = None
+    domain: Optional[str] = None
+    quota_limit: Optional[str] = None
+    quota_location: Optional[str] = None
+    is_transient: Optional[bool] = None
+
+
+@dataclass
+class RetryPolicy:
+    is_retriable: bool = False
+    will_retry: bool = False
+    retry_state: str = "unknown"
+    next_run_at: Optional[str] = None
+    attempts_made: Optional[int] = None
+    max_attempts: Optional[int] = None
+    attempts_remaining: Optional[int] = None
+    manual_retry_allowed: bool = False
+    reason: Optional[str] = None
+
+
+@dataclass
 class PlatformResult:
     social_account_id: str = ""
     id: Optional[str] = None
@@ -84,6 +121,10 @@ class PlatformResult:
     external_id: Optional[str] = None
     url: Optional[str] = None
     error_message: Optional[str] = None
+    error_source: Optional[str] = None
+    error_temporality: Optional[str] = None
+    provider_error: Optional[ProviderError] = None
+    retry_policy: Optional[RetryPolicy] = None
     published_at: Optional[str] = None
     warnings: list[str] = field(default_factory=list)
 
@@ -156,6 +197,28 @@ class MediaUploadResponse:
     download_url: Optional[str] = None
     expires_at: Optional[str] = None
     created_at: Optional[str] = None
+
+
+@dataclass
+class AudioOverlayError:
+    code: str = ""
+    message: str = ""
+    retryable: bool = False
+
+
+@dataclass
+class AudioOverlayJob:
+    id: str
+    status: str = ""
+    video_media_id: str = ""
+    audio_media_id: str = ""
+    output_media_id: Optional[str] = None
+    mode: str = ""
+    fit: str = ""
+    created_at: str = ""
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    error: Optional[AudioOverlayError] = None
 
 
 @dataclass
