@@ -222,6 +222,28 @@ class AudioOverlayJob:
 
 
 @dataclass
+class GifConversionErrorData:
+    code: str = ""
+    message: str = ""
+    retryable: bool = False
+
+
+@dataclass
+class GifConversionJob:
+    id: str
+    kind: str = "gif_to_mp4"
+    status: str = ""
+    gif_media_id: str = ""
+    background_color: str = "#FFFFFF"
+    output_profile: str = "universal_mp4_v1"
+    output_media_id: Optional[str] = None
+    created_at: str = ""
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    error: Optional[GifConversionErrorData] = None
+
+
+@dataclass
 class PostAnalyticsItem:
     post_id: str = ""
     social_account_id: str = ""

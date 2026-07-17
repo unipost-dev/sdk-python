@@ -82,6 +82,15 @@ class QuotaError(UniPostError):
         super().__init__(message, 403, "quota_exceeded", **contract)
 
 
+class GifConversionError(Exception):
+    """A GIF conversion job reached the terminal failed state."""
+
+    def __init__(self, code: str, message: str, retryable: bool) -> None:
+        super().__init__(message)
+        self.code = code
+        self.retryable = retryable
+
+
 def parse_api_error(status: int, body: dict[str, Any]) -> UniPostError:
     """Parse an API error response into the appropriate error class."""
     error = body.get("error") if isinstance(body, dict) else {}

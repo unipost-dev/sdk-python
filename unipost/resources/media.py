@@ -1,10 +1,21 @@
 """Media resource."""
 
 from __future__ import annotations
+import threading
+import time
+import uuid
 from typing import Any, Optional
 from pathlib import Path
 
-from unipost.types import AudioOverlayError, AudioOverlayJob, MediaUploadResponse, _from_dict
+from unipost.errors import GifConversionError
+from unipost.types import (
+    AudioOverlayError,
+    AudioOverlayJob,
+    GifConversionErrorData,
+    GifConversionJob,
+    MediaUploadResponse,
+    _from_dict,
+)
 
 MIME_TYPES = {
     ".jpg": "image/jpeg",
@@ -33,6 +44,90 @@ def _normalize_audio_overlay(data: dict[str, Any]) -> AudioOverlayJob:
     if isinstance(payload.get("error"), dict):
         payload["error"] = _from_dict(AudioOverlayError, payload["error"])
     return _from_dict(AudioOverlayJob, payload)
+
+
+def _normalize_gif_conversion(data: dict[str, Any]) -> GifConversionJob:
+    payload = dict(data)
+    if isinstance(payload.get("error"), dict):
+        payload["error"] = _from_dict(GifConversionErrorData, payload["error"])
+    return _from_dict(GifConversionJob, payload)
+
+
+class GifConversions:
+    def __init__(self, http: Any, media: "Media") -> None:
+        self._http = http
+        self._media = media
+
+    def create(
+        self,
+        *,
+        gif_media_id: str,
+        background_color: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
+    ) -> GifConversionJob:
+        body: dict[str, Any] = {"gif_media_id": gif_media_id}
+        if background_color is not None:
+            body["background_color"] = background_color
+        headers = {"Idempotency-Key": idempotency_key} if idempotency_key else None
+        resp = self._http.post("/v1/media/gif-conversions", body=body, headers=headers)
+        return _normalize_gif_conversion(resp["data"])
+
+    def get(self, conversion_id: str) -> GifConversionJob:
+        resp = self._http.get(f"/v1/media/gif-conversions/{conversion_id}")
+        return _normalize_gif_conversion(resp["data"])
+
+    def wait(
+        self,
+        conversion_id: str,
+        *,
+        poll_interval: float = 2.0,
+        timeout: float = 300.0,
+        cancel_event: Optional[threading.Event] = None,
+    ) -> GifConversionJob:
+        deadline = time.monotonic() + timeout
+        while True:
+            if cancel_event is not None and cancel_event.is_set():
+                raise InterruptedError("GIF conversion polling was cancelled")
+            job = self.get(conversion_id)
+            if job.status == "succeeded":
+                return job
+            if job.status == "failed":
+                error = job.error or GifConversionErrorData(
+                    code="gif_conversion_failed", message="GIF conversion failed", retryable=False
+                )
+                raise GifConversionError(error.code, error.message, error.retryable)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(f"Timed out waiting for GIF conversion {conversion_id}")
+            delay = min(poll_interval, remaining)
+            if cancel_event is not None:
+                if cancel_event.wait(delay):
+                    raise InterruptedError("GIF conversion polling was cancelled")
+            else:
+                time.sleep(delay)
+
+    def upload_and_convert(
+        self,
+        file_path: str,
+        *,
+        background_color: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
+        poll_interval: float = 2.0,
+        timeout: float = 300.0,
+        cancel_event: Optional[threading.Event] = None,
+    ) -> GifConversionJob:
+        gif_media_id = self._media.upload_file(file_path)
+        created = self.create(
+            gif_media_id=gif_media_id,
+            background_color=background_color,
+            idempotency_key=idempotency_key or str(uuid.uuid4()),
+        )
+        return self.wait(
+            created.id,
+            poll_interval=poll_interval,
+            timeout=timeout,
+            cancel_event=cancel_event,
+        )
 
 
 class AudioOverlays:
@@ -79,6 +174,19 @@ class Media:
     def __init__(self, http: Any) -> None:
         self._http = http
         self.audio_overlays = AudioOverlays(http)
+        self.gif_conversions = GifConversions(http, self)
+
+    def create_gif_conversion(self, **kwargs: Any) -> GifConversionJob:
+        return self.gif_conversions.create(**kwargs)
+
+    def get_gif_conversion(self, conversion_id: str) -> GifConversionJob:
+        return self.gif_conversions.get(conversion_id)
+
+    def wait_for_gif_conversion(self, conversion_id: str, **kwargs: Any) -> GifConversionJob:
+        return self.gif_conversions.wait(conversion_id, **kwargs)
+
+    def upload_and_convert_gif(self, file_path: str, **kwargs: Any) -> GifConversionJob:
+        return self.gif_conversions.upload_and_convert(file_path, **kwargs)
 
     def upload(
         self,

@@ -10,6 +10,7 @@ from unipost.errors import (
     RateLimitError,
     PlatformError,
     QuotaError,
+    GifConversionError,
 )
 from unipost.webhook import verify_webhook_signature
 from unipost.types import (
@@ -37,6 +38,8 @@ from unipost.types import (
     MediaUploadResponse,
     AudioOverlayError,
     AudioOverlayJob,
+    GifConversionErrorData,
+    GifConversionJob,
 )
 from unipost.resources.profiles import Profiles
 from unipost.resources.api_keys import ApiKeys
@@ -53,6 +56,7 @@ __all__ = [
     "RateLimitError",
     "PlatformError",
     "QuotaError",
+    "GifConversionError",
     "verify_webhook_signature",
     "Workspace",
     "SocialAccount",
@@ -81,4 +85,6 @@ __all__ = [
     "MediaUploadResponse",
     "AudioOverlayError",
     "AudioOverlayJob",
+    "GifConversionErrorData",
+    "GifConversionJob",
 ]

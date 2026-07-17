@@ -229,10 +229,97 @@ class _AsyncAudioOverlays:
         return _normalize_audio_overlay(resp["data"])
 
 
+class _AsyncGifConversions:
+    def __init__(self, http: AsyncHttpClient, media: "_AsyncMedia") -> None:
+        self._http = http
+        self._media = media
+
+    async def create(
+        self,
+        *,
+        gif_media_id: str,
+        background_color: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
+    ) -> Any:
+        from unipost.resources.media import _normalize_gif_conversion
+
+        body: dict[str, Any] = {"gif_media_id": gif_media_id}
+        if background_color is not None:
+            body["background_color"] = background_color
+        headers = {"Idempotency-Key": idempotency_key} if idempotency_key else None
+        resp = await self._http.post("/v1/media/gif-conversions", body=body, headers=headers)
+        return _normalize_gif_conversion(resp["data"])
+
+    async def get(self, conversion_id: str) -> Any:
+        from unipost.resources.media import _normalize_gif_conversion
+
+        resp = await self._http.get(f"/v1/media/gif-conversions/{conversion_id}")
+        return _normalize_gif_conversion(resp["data"])
+
+    async def wait(
+        self,
+        conversion_id: str,
+        *,
+        poll_interval: float = 2.0,
+        timeout: float = 300.0,
+    ) -> Any:
+        import asyncio
+        from unipost.errors import GifConversionError
+        from unipost.types import GifConversionErrorData
+
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while True:
+            job = await self.get(conversion_id)
+            if job.status == "succeeded":
+                return job
+            if job.status == "failed":
+                error = job.error or GifConversionErrorData(
+                    code="gif_conversion_failed", message="GIF conversion failed", retryable=False
+                )
+                raise GifConversionError(error.code, error.message, error.retryable)
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise TimeoutError(f"Timed out waiting for GIF conversion {conversion_id}")
+            await asyncio.sleep(min(poll_interval, remaining))
+
+    async def upload_and_convert(
+        self,
+        file_path: str,
+        *,
+        background_color: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
+        poll_interval: float = 2.0,
+        timeout: float = 300.0,
+    ) -> Any:
+        import uuid
+
+        gif_media_id = await self._media.upload_file(file_path)
+        created = await self.create(
+            gif_media_id=gif_media_id,
+            background_color=background_color,
+            idempotency_key=idempotency_key or str(uuid.uuid4()),
+        )
+        return await self.wait(created.id, poll_interval=poll_interval, timeout=timeout)
+
+
 class _AsyncMedia:
     def __init__(self, http: AsyncHttpClient) -> None:
         self._http = http
         self.audio_overlays = _AsyncAudioOverlays(http)
+        self.gif_conversions = _AsyncGifConversions(http, self)
+
+    async def create_gif_conversion(self, **kwargs: Any) -> Any:
+        return await self.gif_conversions.create(**kwargs)
+
+    async def get_gif_conversion(self, conversion_id: str) -> Any:
+        return await self.gif_conversions.get(conversion_id)
+
+    async def wait_for_gif_conversion(self, conversion_id: str, **kwargs: Any) -> Any:
+        return await self.gif_conversions.wait(conversion_id, **kwargs)
+
+    async def upload_and_convert_gif(self, file_path: str, **kwargs: Any) -> Any:
+        return await self.gif_conversions.upload_and_convert(file_path, **kwargs)
 
     async def upload(
         self,
@@ -263,6 +350,32 @@ class _AsyncMedia:
 
     async def delete(self, media_id: str) -> None:
         await self._http.delete(f"/v1/media/{media_id}")
+
+    async def upload_file(self, file_path: str) -> str:
+        import asyncio
+        from pathlib import Path
+        from urllib.request import Request, urlopen
+        from unipost.resources.media import MIME_TYPES
+
+        path = Path(file_path)
+        content_type = MIME_TYPES.get(path.suffix.lower(), "application/octet-stream")
+        result = await self.upload(
+            filename=path.name,
+            content_type=content_type,
+            size_bytes=path.stat().st_size,
+        )
+
+        def put() -> None:
+            request = Request(
+                result.upload_url,
+                data=path.read_bytes(),
+                headers={"Content-Type": content_type},
+                method="PUT",
+            )
+            urlopen(request)
+
+        await asyncio.to_thread(put)
+        return result.media_id
 
 
 class _AsyncApiKeys:
