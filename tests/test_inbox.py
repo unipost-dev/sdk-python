@@ -299,6 +299,44 @@ def test_reply_decoder_accepts_only_plain_response_data():
     )
 
 
+def test_shared_inbox_scope_and_list_helpers_preserve_contract():
+    with pytest.raises(ValueError, match="external_user_id"):
+        inbox_resource._validate_managed_user_id(" \t")
+
+    scope_query = inbox_resource._build_scope_query("managed_user", "user A")
+    list_query = inbox_resource._build_list_query(
+        scope_query,
+        source="ig_comment",
+        is_read=False,
+        is_own=False,
+        limit=25,
+    )
+    response = inbox_resource._decode_list_response(
+        {
+            "data": [{**_reply_item_payload(), "unknown_item_field": "ignored"}],
+            "request_id": "req_shared",
+            "next_cursor": "must_be_ignored",
+        }
+    )
+
+    assert scope_query == {
+        "inbox_scope": "managed_user",
+        "external_user_id": "user A",
+    }
+    assert list_query == {
+        **scope_query,
+        "source": "ig_comment",
+        "is_read": "false",
+        "is_own": "false",
+        "limit": 25,
+    }
+    assert response == InboxListResponse(
+        data=[InboxItem(**_reply_item_payload())],
+        request_id="req_shared",
+    )
+    assert not hasattr(response, "next_cursor")
+
+
 def _reply_item_payload() -> dict[str, object]:
     return {
         "id": "inbox_1",

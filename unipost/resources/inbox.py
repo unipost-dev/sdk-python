@@ -20,6 +20,49 @@ from unipost.types import (
 
 _RECONCILING_CODE = "X_REMOTE_ACCEPTED_RECONCILING"
 _INVALID_IDEMPOTENCY_KEY = "Invalid idempotency_key."
+_InboxScope = Literal["managed_user", "workspace"]
+
+
+def _validate_managed_user_id(external_user_id: str) -> None:
+    if not external_user_id.strip():
+        raise ValueError("external_user_id must not be blank")
+
+
+def _build_scope_query(
+    scope: _InboxScope,
+    external_user_id: Optional[str],
+) -> dict[str, str]:
+    query: dict[str, str] = {"inbox_scope": scope}
+    if external_user_id is not None:
+        query["external_user_id"] = external_user_id
+    return query
+
+
+def _build_list_query(
+    scope_query: dict[str, str],
+    *,
+    source: Optional[InboxSource] = None,
+    is_read: Optional[bool] = None,
+    is_own: Optional[bool] = None,
+    limit: Optional[int] = None,
+) -> dict[str, Any]:
+    query: dict[str, Any] = dict(scope_query)
+    if source is not None:
+        query["source"] = source
+    if is_read is not None:
+        query["is_read"] = str(is_read).lower()
+    if is_own is not None:
+        query["is_own"] = str(is_own).lower()
+    if limit is not None:
+        query["limit"] = limit
+    return query
+
+
+def _decode_list_response(response: Any) -> InboxListResponse:
+    return InboxListResponse(
+        data=[_from_dict(InboxItem, item) for item in response.get("data") or []],
+        request_id=response.get("request_id"),
+    )
 
 
 def _encode_item_id(item_id: str) -> str:
@@ -88,8 +131,7 @@ class Inbox:
     _http: Any
 
     def managed_user(self, external_user_id: str) -> _ScopedInbox:
-        if not external_user_id.strip():
-            raise ValueError("external_user_id must not be blank")
+        _validate_managed_user_id(external_user_id)
         return _ScopedInbox(
             self._http,
             _scope="managed_user",
@@ -103,14 +145,11 @@ class Inbox:
 @dataclass(frozen=True)
 class _ScopedInbox:
     _http: Any
-    _scope: Literal["managed_user", "workspace"]
+    _scope: _InboxScope
     _external_user_id: Optional[str] = None
 
     def _scope_query(self) -> dict[str, str]:
-        query: dict[str, str] = {"inbox_scope": self._scope}
-        if self._external_user_id is not None:
-            query["external_user_id"] = self._external_user_id
-        return query
+        return _build_scope_query(self._scope, self._external_user_id)
 
     def list(
         self,
@@ -120,21 +159,15 @@ class _ScopedInbox:
         is_own: Optional[bool] = None,
         limit: Optional[int] = None,
     ) -> InboxListResponse:
-        query: dict[str, Any] = self._scope_query()
-        if source is not None:
-            query["source"] = source
-        if is_read is not None:
-            query["is_read"] = str(is_read).lower()
-        if is_own is not None:
-            query["is_own"] = str(is_own).lower()
-        if limit is not None:
-            query["limit"] = limit
-
-        response = self._http.get("/v1/inbox", query=query)
-        return InboxListResponse(
-            data=[_from_dict(InboxItem, item) for item in response.get("data") or []],
-            request_id=response.get("request_id"),
+        query = _build_list_query(
+            self._scope_query(),
+            source=source,
+            is_read=is_read,
+            is_own=is_own,
+            limit=limit,
         )
+        response = self._http.get("/v1/inbox", query=query)
+        return _decode_list_response(response)
 
     def reply(
         self,
