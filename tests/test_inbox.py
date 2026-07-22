@@ -7,6 +7,7 @@ from socketserver import TCPServer
 from threading import Thread
 from urllib.parse import parse_qs, urlsplit
 from urllib.error import HTTPError
+from urllib.request import Request
 
 import pytest
 
@@ -14,6 +15,7 @@ from unipost import InboxItem, InboxListResponse, UniPost
 from unipost.errors import RateLimitError, UniPostError
 from unipost.http import HttpClient
 from unipost.resources.inbox import Inbox
+import unipost.http as http_module
 import unipost.resources.inbox as inbox_resource
 import unipost.types as types
 
@@ -141,11 +143,11 @@ def test_managed_user_id_is_encoded_in_real_http_url(monkeypatch: pytest.MonkeyP
         def read(self) -> bytes:
             return json.dumps({"data": [], "request_id": "req_1"}).encode("utf-8")
 
-    def fake_urlopen(request, *, timeout, context):
+    def fake_urlopen(request, *, timeout, context, follow_redirects):
         requests.append(request)
         return StubResponse()
 
-    monkeypatch.setattr("unipost.http.urlopen", fake_urlopen)
+    monkeypatch.setattr("unipost.http._open_request", fake_urlopen)
     http = HttpClient(
         api_key="up_test_inbox",
         base_url="https://api.example.test",
@@ -251,7 +253,10 @@ def test_response_aware_http_retains_success_status_headers_and_body(
         def read(self) -> bytes:
             return json.dumps({"error": {"code": "accepted"}}).encode("utf-8")
 
-    monkeypatch.setattr("unipost.http.urlopen", lambda *_args, **_kwargs: StubResponse())
+    monkeypatch.setattr(
+        "unipost.http._open_request",
+        lambda *_args, **_kwargs: StubResponse(),
+    )
     http = HttpClient(
         api_key="up_test_inbox",
         base_url="https://api.example.test",
@@ -327,6 +332,13 @@ class _StubResponse:
 
     def read(self) -> bytes:
         return self._body
+
+
+class _LoopbackHTTPServer(ThreadingHTTPServer):
+    def server_bind(self):
+        TCPServer.server_bind(self)
+        self.server_name = "127.0.0.1"
+        self.server_port = self.server_address[1]
 
 
 def _http_error(
@@ -481,12 +493,6 @@ def test_reply_does_not_follow_cross_origin_redirects():
     source_requests = []
     target_requests = []
 
-    class LoopbackHTTPServer(ThreadingHTTPServer):
-        def server_bind(self):
-            TCPServer.server_bind(self)
-            self.server_name = "127.0.0.1"
-            self.server_port = self.server_address[1]
-
     class TargetHandler(BaseHTTPRequestHandler):
         def do_GET(self):
             target_requests.append(dict(self.headers.items()))
@@ -500,7 +506,7 @@ def test_reply_does_not_follow_cross_origin_redirects():
         def log_message(self, _format, *_args):
             return
 
-    target_server = LoopbackHTTPServer(("127.0.0.1", 0), TargetHandler)
+    target_server = _LoopbackHTTPServer(("127.0.0.1", 0), TargetHandler)
     target_thread = Thread(target=target_server.serve_forever, daemon=True)
     target_thread.start()
     target_url = f"http://127.0.0.1:{target_server.server_port}/capture"
@@ -523,7 +529,7 @@ def test_reply_does_not_follow_cross_origin_redirects():
         def log_message(self, _format, *_args):
             return
 
-    source_server = LoopbackHTTPServer(("127.0.0.1", 0), SourceHandler)
+    source_server = _LoopbackHTTPServer(("127.0.0.1", 0), SourceHandler)
     source_thread = Thread(target=source_server.serve_forever, daemon=True)
     source_thread.start()
 
@@ -552,6 +558,120 @@ def test_reply_does_not_follow_cross_origin_redirects():
         target_server.shutdown()
         target_server.server_close()
         target_thread.join(timeout=5)
+
+
+def test_ordinary_request_strips_secrets_on_cross_origin_redirect():
+    source_requests = []
+    target_requests = []
+
+    class TargetHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            target_requests.append(dict(self.headers.items()))
+            body = json.dumps({"data": "ok"}).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, _format, *_args):
+            return
+
+    target_server = _LoopbackHTTPServer(("127.0.0.1", 0), TargetHandler)
+    target_thread = Thread(target=target_server.serve_forever, daemon=True)
+    target_thread.start()
+    target_url = f"http://127.0.0.1:{target_server.server_port}/capture"
+
+    class SourceHandler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            source_requests.append(dict(self.headers.items()))
+            content_length = int(self.headers.get("Content-Length", "0"))
+            self.rfile.read(content_length)
+            self.send_response(302)
+            self.send_header("Location", target_url)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, _format, *_args):
+            return
+
+    source_server = _LoopbackHTTPServer(("127.0.0.1", 0), SourceHandler)
+    source_thread = Thread(target=source_server.serve_forever, daemon=True)
+    source_thread.start()
+
+    try:
+        http = HttpClient(
+            api_key="up_test_redirect_key",
+            base_url=f"http://127.0.0.1:{source_server.server_port}",
+            timeout=5,
+        )
+
+        result = http.request(
+            "POST",
+            "/ordinary",
+            body={"text": "Thanks"},
+            headers={"Idempotency-Key": "idem-redirect-test"},
+        )
+
+        assert result == {"data": "ok"}
+        assert len(source_requests) == 1
+        source_headers = {
+            key.lower(): value for key, value in source_requests[0].items()
+        }
+        assert source_headers["authorization"] == "Bearer up_test_redirect_key"
+        assert source_headers["idempotency-key"] == "idem-redirect-test"
+        assert len(target_requests) == 1
+        target_headers = {
+            key.lower(): value for key, value in target_requests[0].items()
+        }
+        assert "authorization" not in target_headers
+        assert "idempotency-key" not in target_headers
+    finally:
+        source_server.shutdown()
+        source_server.server_close()
+        source_thread.join(timeout=5)
+        target_server.shutdown()
+        target_server.server_close()
+        target_thread.join(timeout=5)
+
+
+def test_safe_redirect_retains_headers_for_normalized_same_origin():
+    request = Request(
+        "HTTP://user@example.test:80/start",
+        data=b"{}",
+        headers={
+            "Authorization": "Bearer up_test_redirect_key",
+            "Idempotency-Key": "idem-redirect-test",
+            "X-Test": "preserved",
+        },
+        method="POST",
+    )
+
+    redirected = http_module._SafeRedirectHandler().redirect_request(
+        request,
+        None,
+        302,
+        "Found",
+        {},
+        "http://EXAMPLE.TEST/next",
+    )
+
+    redirected_headers = {
+        key.lower(): value for key, value in redirected.header_items()
+    }
+    assert redirected_headers["authorization"] == "Bearer up_test_redirect_key"
+    assert redirected_headers["idempotency-key"] == "idem-redirect-test"
+    assert redirected_headers["x-test"] == "preserved"
+    assert http_module._url_origin("https://example.test/path") == (
+        "https",
+        "example.test",
+        443,
+    )
+    assert http_module._url_origin("http://trusted.test@evil.test/path") == (
+        "http",
+        "evil.test",
+        80,
+    )
 
 
 @pytest.mark.parametrize("item_id", ["", ".", ".."])

@@ -8,8 +8,8 @@ import time
 from dataclasses import dataclass
 from typing import Any, Iterator, Optional
 from urllib.error import HTTPError
-from urllib.parse import urlencode
-from urllib.request import HTTPRedirectHandler, HTTPSHandler, Request, build_opener, urlopen
+from urllib.parse import urlencode, urlsplit
+from urllib.request import HTTPRedirectHandler, HTTPSHandler, Request, build_opener
 
 from unipost.errors import parse_api_error
 
@@ -18,6 +18,8 @@ DEFAULT_TIMEOUT = 30
 MAX_RETRIES = 2
 SDK_VERSION = "0.5.0"
 _MAX_RETRY_AFTER_SECONDS = 60
+_SENSITIVE_REDIRECT_HEADERS = {"authorization", "idempotency-key"}
+_DEFAULT_PORTS = {"http": 80, "https": 443, "ftp": 21}
 
 
 @dataclass(frozen=True)
@@ -32,6 +34,50 @@ class _NoRedirectHandler(HTTPRedirectHandler):
         raise HTTPError(req.full_url, code, msg, headers, fp)
 
 
+def _url_origin(url: str) -> Optional[tuple[str, str, Optional[int]]]:
+    try:
+        parts = urlsplit(url)
+        scheme = parts.scheme.lower()
+        hostname = parts.hostname
+        port = parts.port
+    except ValueError:
+        return None
+    if not scheme or hostname is None:
+        return None
+    return (
+        scheme,
+        hostname.lower(),
+        port if port is not None else _DEFAULT_PORTS.get(scheme),
+    )
+
+
+class _SafeRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        redirected = super().redirect_request(
+            req,
+            fp,
+            code,
+            msg,
+            headers,
+            newurl,
+        )
+        source_origin = _url_origin(req.full_url)
+        target_origin = _url_origin(newurl)
+        if (
+            source_origin is None
+            or target_origin is None
+            or source_origin != target_origin
+        ):
+            for header_store in (
+                redirected.headers,
+                redirected.unredirected_hdrs,
+            ):
+                for name in tuple(header_store):
+                    if name.lower() in _SENSITIVE_REDIRECT_HEADERS:
+                        del header_store[name]
+        return redirected
+
+
 def _open_request(
     request: Request,
     *,
@@ -39,12 +85,12 @@ def _open_request(
     context: ssl.SSLContext,
     follow_redirects: bool,
 ):
+    redirect_handler: HTTPRedirectHandler
     if follow_redirects:
-        return urlopen(request, timeout=timeout, context=context)
-    opener = build_opener(
-        HTTPSHandler(context=context),
-        _NoRedirectHandler(),
-    )
+        redirect_handler = _SafeRedirectHandler()
+    else:
+        redirect_handler = _NoRedirectHandler()
+    opener = build_opener(HTTPSHandler(context=context), redirect_handler)
     return opener.open(request, timeout=timeout)
 
 
@@ -227,7 +273,12 @@ class HttpClient:
         for attempt in range(MAX_RETRIES + 1):
             try:
                 req = Request(url, headers=req_headers, method=method)
-                with urlopen(req, timeout=self._timeout, context=self._ssl_ctx) as resp:
+                with _open_request(
+                    req,
+                    timeout=self._timeout,
+                    context=self._ssl_ctx,
+                    follow_redirects=True,
+                ) as resp:
                     return resp.read().decode("utf-8")
             except HTTPError as e:
                 try:
@@ -277,7 +328,12 @@ class HttpClient:
 
         try:
             req = Request(url, headers=req_headers, method="GET")
-            with urlopen(req, timeout=self._timeout, context=self._ssl_ctx) as resp:
+            with _open_request(
+                req,
+                timeout=self._timeout,
+                context=self._ssl_ctx,
+                follow_redirects=True,
+            ) as resp:
                 while True:
                     raw = resp.readline()
                     if not raw:
