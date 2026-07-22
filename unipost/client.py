@@ -22,6 +22,7 @@ from unipost.resources.webhooks import Webhooks
 from unipost.resources.oauth import OAuth
 from unipost.resources.usage import UsageApi
 from unipost.resources.logs import Logs
+from unipost.resources.inbox import Inbox
 
 
 class UniPost:
@@ -56,6 +57,7 @@ class UniPost:
     oauth: OAuth
     usage: UsageApi
     logs: Logs
+    inbox: Inbox
 
     def __init__(
         self,
@@ -94,3 +96,4 @@ class UniPost:
         self.oauth = OAuth(http)
         self.usage = UsageApi(http)
         self.logs = Logs(http)
+        self.inbox = Inbox(http)

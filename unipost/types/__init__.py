@@ -45,6 +45,16 @@ RetryState = Literal[
     "manual_only",
     "unknown",
 ]
+InboxSource = Literal[
+    "ig_comment",
+    "ig_dm",
+    "threads_reply",
+    "fb_comment",
+    "fb_dm",
+    "x_reply",
+    "x_dm",
+]
+InboxThreadStatus = Literal["open", "assigned", "resolved"]
 
 
 @dataclass
@@ -219,6 +229,43 @@ class AudioOverlayJob:
     started_at: Optional[str] = None
     completed_at: Optional[str] = None
     error: Optional[AudioOverlayError] = None
+
+
+@dataclass
+class InboxItem:
+    id: str
+    social_account_id: str
+    workspace_id: str
+    source: InboxSource
+    external_id: str
+    thread_key: str
+    thread_status: InboxThreadStatus
+    is_read: bool
+    is_own: bool
+    received_at: str
+    created_at: str
+    external_user_id: Optional[str] = None
+    parent_external_id: Optional[str] = None
+    conversation_id: Optional[str] = None
+    sender_id: Optional[str] = None
+    sender_username: Optional[str] = None
+    sender_name: Optional[str] = None
+    author_id: Optional[str] = None
+    author_username: Optional[str] = None
+    author_name: Optional[str] = None
+    text: Optional[str] = None
+    body: Optional[str] = None
+    media: list[dict[str, Any]] = field(default_factory=list)
+    raw: Optional[dict[str, Any]] = None
+    status: Optional[str] = None
+    metadata: Optional[dict[str, Any]] = None
+    updated_at: Optional[str] = None
+
+
+@dataclass
+class InboxListResponse:
+    data: list[InboxItem]
+    request_id: Optional[str] = None
 
 
 @dataclass

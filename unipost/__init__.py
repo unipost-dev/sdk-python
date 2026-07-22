@@ -37,6 +37,10 @@ from unipost.types import (
     MediaUploadResponse,
     AudioOverlayError,
     AudioOverlayJob,
+    InboxSource,
+    InboxThreadStatus,
+    InboxItem,
+    InboxListResponse,
 )
 from unipost.resources.profiles import Profiles
 from unipost.resources.api_keys import ApiKeys
@@ -81,4 +85,8 @@ __all__ = [
     "MediaUploadResponse",
     "AudioOverlayError",
     "AudioOverlayJob",
+    "InboxSource",
+    "InboxThreadStatus",
+    "InboxItem",
+    "InboxListResponse",
 ]
