@@ -561,6 +561,36 @@ def test_reply_malformed_success_json_fails_closed_without_secrets(
     assert "idem-secret-value" not in representation
 
 
+def test_reply_invalid_utf8_fails_closed_without_secrets(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    sensitive_marker = b"up_test_inbox_secret_adjacent"
+    requests, _calls = _stub_urlopen(
+        monkeypatch,
+        [
+            _StubResponse(
+                202,
+                headers={"X-UniPost-Operation-Id": "op_1"},
+                raw_body=sensitive_marker + b"\xff",
+            )
+        ],
+    )
+
+    with pytest.raises(ValueError) as raised:
+        _real_client().inbox.workspace().reply(
+            "item_1",
+            text="Thanks",
+            idempotency_key="idem-secret-value",
+        )
+
+    assert len(requests) == 1
+    assert str(raised.value) == "Failed to decode Inbox reply response."
+    representation = repr(raised.value)
+    assert "up_test_inbox_secret" not in representation
+    assert "idem-secret-value" not in representation
+    assert "up_test_inbox_secret_adjacent" not in representation
+
+
 @pytest.mark.parametrize(
     ("status", "code"),
     [

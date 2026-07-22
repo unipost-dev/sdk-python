@@ -103,7 +103,7 @@ class _ScopedInbox:
                 retry_rate_limits=False,
                 preserve_error_code=True,
             )
-        except JSONDecodeError:
+        except (JSONDecodeError, UnicodeDecodeError):
             raise ValueError("Failed to decode Inbox reply response.") from None
 
         operation_id = response.headers.get("x-unipost-operation-id", "").strip()
