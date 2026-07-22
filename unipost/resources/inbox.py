@@ -32,10 +32,19 @@ def _build_scope_query(
     scope: _InboxScope,
     external_user_id: Optional[str],
 ) -> dict[str, str]:
-    query: dict[str, str] = {"inbox_scope": scope}
-    if external_user_id is not None:
-        query["external_user_id"] = external_user_id
-    return query
+    if scope == "workspace":
+        if external_user_id is not None:
+            raise ValueError("workspace scope must not include external_user_id")
+        return {"inbox_scope": "workspace"}
+    if scope == "managed_user":
+        if external_user_id is None:
+            raise ValueError("managed_user scope requires external_user_id")
+        _validate_managed_user_id(external_user_id)
+        return {
+            "inbox_scope": "managed_user",
+            "external_user_id": external_user_id,
+        }
+    raise ValueError("Invalid inbox scope.")
 
 
 def _build_list_query(

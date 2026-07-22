@@ -99,11 +99,7 @@ class AsyncHttpClient:
                     if resp.status_code == 204:
                         body_value = None
                     else:
-                        body_value = (
-                            json.loads(resp.content.decode("utf-8"))
-                            if resp.content
-                            else None
-                        )
+                        body_value = resp.json() if resp.content else None
                     return _AsyncHttpResponse(
                         status=resp.status_code,
                         headers={

@@ -299,6 +299,37 @@ def test_reply_decoder_accepts_only_plain_response_data():
     )
 
 
+@pytest.mark.parametrize(
+    ("status", "headers", "body"),
+    [
+        (
+            202,
+            {"x-unipost-operation-id": "op_1"},
+            {
+                "error": {
+                    "code": "X_REMOTE_ACCEPTED_RECONCILING",
+                    "message": "Accepted",
+                },
+                "request_id": 123,
+            },
+        ),
+        (200, {}, []),
+        (200, {}, {"data": []}),
+        (200, {}, {"data": {"social_account_id": "sa_missing_id"}}),
+    ],
+)
+def test_reply_decoder_explicit_invalid_shapes_fail_closed(
+    status: int,
+    headers: dict[str, str],
+    body: object,
+):
+    with pytest.raises(
+        ValueError,
+        match=rf"^Failed to decode Inbox reply response with status {status}\.$",
+    ):
+        inbox_resource._decode_reply_response(status, headers, body)
+
+
 def test_shared_inbox_scope_and_list_helpers_preserve_contract():
     with pytest.raises(ValueError, match="external_user_id"):
         inbox_resource._validate_managed_user_id(" \t")
@@ -335,6 +366,33 @@ def test_shared_inbox_scope_and_list_helpers_preserve_contract():
         request_id="req_shared",
     )
     assert not hasattr(response, "next_cursor")
+
+
+@pytest.mark.parametrize(
+    ("scope", "external_user_id"),
+    [
+        ("workspace", "user_1"),
+        ("managed_user", None),
+        ("managed_user", " \t"),
+        ("invalid_scope", None),
+    ],
+)
+def test_shared_scope_query_rejects_invalid_scope_id_correlations(
+    scope: str,
+    external_user_id: str | None,
+):
+    with pytest.raises(ValueError):
+        inbox_resource._build_scope_query(scope, external_user_id)
+
+
+def test_shared_scope_query_accepts_only_valid_scope_id_correlations():
+    assert inbox_resource._build_scope_query("workspace", None) == {
+        "inbox_scope": "workspace"
+    }
+    assert inbox_resource._build_scope_query("managed_user", "user_1") == {
+        "inbox_scope": "managed_user",
+        "external_user_id": "user_1",
+    }
 
 
 def _reply_item_payload() -> dict[str, object]:
@@ -1560,6 +1618,78 @@ async def test_async_ordinary_request_still_returns_body_only(
 
     assert len(requests) == 1
     assert result == {"data": "ok"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [
+        (b'\xef\xbb\xbf{"data":"utf8-bom"}', {"data": "utf8-bom"}),
+        (
+            json.dumps({"data": "utf16"}).encode("utf-16"),
+            {"data": "utf16"},
+        ),
+    ],
+)
+async def test_async_ordinary_request_preserves_httpx_json_encoding_compatibility(
+    monkeypatch: pytest.MonkeyPatch,
+    content: bytes,
+    expected: dict[str, str],
+):
+    requests, _client_options = _install_async_transport(
+        monkeypatch,
+        lambda _request: httpx.Response(
+            200,
+            headers={"Content-Type": "application/json"},
+            content=content,
+        ),
+    )
+
+    result = await _async_client().inbox._http.request("GET", "/ordinary")
+
+    assert len(requests) == 1
+    assert result == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("retry_after_header", "expected_delay"),
+    [
+        ("up_test_retry_header_secret", 1),
+        ("1000000000", 60),
+    ],
+)
+async def test_async_ordinary_request_sanitizes_retry_header_and_retries_once(
+    monkeypatch: pytest.MonkeyPatch,
+    retry_after_header: str,
+    expected_delay: int,
+):
+    outcomes = iter(
+        [
+            _async_error_response(
+                429,
+                "RATE_LIMITED",
+                retry_after_header=retry_after_header,
+            ),
+            httpx.Response(200, json={"data": "ok"}),
+        ]
+    )
+    requests, _client_options = _install_async_transport(
+        monkeypatch,
+        lambda _request: next(outcomes),
+    )
+    sleeps: list[object] = []
+
+    async def fake_sleep(delay: object) -> None:
+        sleeps.append(delay)
+
+    monkeypatch.setattr("asyncio.sleep", fake_sleep)
+
+    result = await _async_client().inbox._http.request("GET", "/ordinary")
+
+    assert result == {"data": "ok"}
+    assert len(requests) == 2
+    assert sleeps == [expected_delay]
 
 
 @pytest.mark.asyncio
