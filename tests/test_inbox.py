@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import json
+from urllib.parse import parse_qs, urlsplit
+
 import pytest
 
 from unipost import InboxItem, InboxListResponse, UniPost
+from unipost.http import HttpClient
 from unipost.resources.inbox import Inbox
 
 
@@ -84,6 +88,47 @@ def test_managed_user_list_injects_scope_and_all_filters(monkeypatch: pytest.Mon
         )
     ]
     assert not hasattr(result, "next_cursor")
+
+
+def test_managed_user_id_is_encoded_in_real_http_url(monkeypatch: pytest.MonkeyPatch):
+    requests = []
+
+    class StubResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, _exc_type, _exc_value, _traceback):
+            return False
+
+        def read(self) -> bytes:
+            return json.dumps({"data": [], "request_id": "req_1"}).encode("utf-8")
+
+    def fake_urlopen(request, *, timeout, context):
+        requests.append(request)
+        return StubResponse()
+
+    monkeypatch.setattr("unipost.http.urlopen", fake_urlopen)
+    http = HttpClient(
+        api_key="up_test_inbox",
+        base_url="https://api.example.test",
+        timeout=5,
+    )
+
+    Inbox(http).managed_user("user A").list()
+
+    assert len(requests) == 1
+    request_url = requests[0].get_full_url()
+    assert "user A" not in request_url
+    assert (
+        "external_user_id=user+A" in request_url
+        or "external_user_id=user%20A" in request_url
+    )
+    assert parse_qs(urlsplit(request_url).query) == {
+        "inbox_scope": ["managed_user"],
+        "external_user_id": ["user A"],
+    }
 
 
 def test_workspace_list_sends_only_workspace_scope(monkeypatch: pytest.MonkeyPatch):
