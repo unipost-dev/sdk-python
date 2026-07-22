@@ -244,22 +244,21 @@ class InboxItem:
     is_own: bool
     received_at: str
     created_at: str
-    external_user_id: Optional[str] = None
     parent_external_id: Optional[str] = None
-    conversation_id: Optional[str] = None
-    sender_id: Optional[str] = None
-    sender_username: Optional[str] = None
-    sender_name: Optional[str] = None
-    author_id: Optional[str] = None
-    author_username: Optional[str] = None
+    assigned_to: Optional[str] = None
+    linked_post_id: Optional[str] = None
     author_name: Optional[str] = None
-    text: Optional[str] = None
+    author_id: Optional[str] = None
+    author_avatar_url: Optional[str] = None
     body: Optional[str] = None
-    media: list[dict[str, Any]] = field(default_factory=list)
-    raw: Optional[dict[str, Any]] = None
-    status: Optional[str] = None
-    metadata: Optional[dict[str, Any]] = None
-    updated_at: Optional[str] = None
+    account_name: Optional[str] = None
+    account_platform: Optional[str] = None
+    account_avatar_url: Optional[str] = None
+    x_credits_counted: Optional[int] = None
+    x_credit_operation: Optional[str] = None
+    x_credit_catalog_version: Optional[str] = None
+    x_credit_billing_mode: Optional[str] = None
+    url: Optional[str] = None
 
 
 @dataclass
