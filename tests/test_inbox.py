@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
 import json
+from socketserver import TCPServer
+from threading import Thread
 from urllib.parse import parse_qs, urlsplit
 from urllib.error import HTTPError
 
@@ -11,6 +14,7 @@ from unipost import InboxItem, InboxListResponse, UniPost
 from unipost.errors import RateLimitError, UniPostError
 from unipost.http import HttpClient
 from unipost.resources.inbox import Inbox
+import unipost.resources.inbox as inbox_resource
 import unipost.types as types
 
 
@@ -261,6 +265,26 @@ def test_response_aware_http_retains_success_status_headers_and_body(
     assert response.body == {"error": {"code": "accepted"}}
 
 
+def test_reply_decoder_accepts_only_plain_response_data():
+    result = inbox_resource._decode_reply_response(
+        202,
+        {"x-unipost-operation-id": " op_plain "},
+        {
+            "error": {
+                "code": "X_REMOTE_ACCEPTED_RECONCILING",
+                "message": "Accepted",
+            },
+            "request_id": "req_plain",
+        },
+    )
+
+    assert result == types.InboxReplyReconciling(
+        operation_id="op_plain",
+        message="Accepted",
+        request_id="req_plain",
+    )
+
+
 def _reply_item_payload() -> dict[str, object]:
     return {
         "id": "inbox_1",
@@ -305,20 +329,27 @@ class _StubResponse:
         return self._body
 
 
-def _http_error(status: int, code: str, *, normalized_code: str = "NORMALIZED"):
+def _http_error(
+    status: int,
+    code: str,
+    *,
+    normalized_code: str = "NORMALIZED",
+    retry_after: object = 0,
+    retry_after_header: str = "0",
+):
     body = {
         "error": {
             "code": code,
             "normalized_code": normalized_code,
             "message": "Reply failed",
-            "retry_after": 0,
+            "retry_after": retry_after,
         }
     }
     return HTTPError(
         "https://api.example.test/v1/inbox/item/reply",
         status,
         "Reply failed",
-        {"Retry-After": "0"},
+        {"Retry-After": retry_after_header},
         BytesIO(json.dumps(body).encode("utf-8")),
     )
 
@@ -330,15 +361,15 @@ def _stub_urlopen(
     requests = []
     calls = []
 
-    def fake_urlopen(request, *, timeout, context):
+    def fake_urlopen(request, *, timeout, context, follow_redirects):
         requests.append(request)
-        calls.append((timeout, context))
+        calls.append((timeout, context, follow_redirects))
         outcome = outcomes[len(requests) - 1]
         if isinstance(outcome, BaseException):
             raise outcome
         return outcome
 
-    monkeypatch.setattr("unipost.http.urlopen", fake_urlopen)
+    monkeypatch.setattr("unipost.http._open_request", fake_urlopen)
     return requests, calls
 
 
@@ -446,6 +477,83 @@ def test_reply_202_returns_reconciling_without_item(
     assert not hasattr(result, "item")
 
 
+def test_reply_does_not_follow_cross_origin_redirects():
+    source_requests = []
+    target_requests = []
+
+    class LoopbackHTTPServer(ThreadingHTTPServer):
+        def server_bind(self):
+            TCPServer.server_bind(self)
+            self.server_name = "127.0.0.1"
+            self.server_port = self.server_address[1]
+
+    class TargetHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            target_requests.append(dict(self.headers.items()))
+            body = json.dumps({"data": _reply_item_payload()}).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, _format, *_args):
+            return
+
+    target_server = LoopbackHTTPServer(("127.0.0.1", 0), TargetHandler)
+    target_thread = Thread(target=target_server.serve_forever, daemon=True)
+    target_thread.start()
+    target_url = f"http://127.0.0.1:{target_server.server_port}/capture"
+
+    class SourceHandler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            source_requests.append(dict(self.headers.items()))
+            content_length = int(self.headers.get("Content-Length", "0"))
+            self.rfile.read(content_length)
+            body = json.dumps(
+                {"error": {"code": "REDIRECT", "message": "Redirect denied"}}
+            ).encode("utf-8")
+            self.send_response(302)
+            self.send_header("Location", target_url)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, _format, *_args):
+            return
+
+    source_server = LoopbackHTTPServer(("127.0.0.1", 0), SourceHandler)
+    source_thread = Thread(target=source_server.serve_forever, daemon=True)
+    source_thread.start()
+
+    try:
+        client = UniPost(
+            api_key="up_test_redirect_key",
+            base_url=f"http://127.0.0.1:{source_server.server_port}",
+            timeout=5,
+        )
+        with pytest.raises(UniPostError) as raised:
+            client.inbox.workspace().reply(
+                "item_1",
+                text="Thanks",
+                idempotency_key="idem-redirect-test",
+            )
+
+        assert raised.value.status == 302
+        assert len(source_requests) == 1
+        assert target_requests == []
+        assert all("Authorization" not in headers for headers in target_requests)
+        assert all("Idempotency-Key" not in headers for headers in target_requests)
+    finally:
+        source_server.shutdown()
+        source_server.server_close()
+        source_thread.join(timeout=5)
+        target_server.shutdown()
+        target_server.server_close()
+        target_thread.join(timeout=5)
+
+
 @pytest.mark.parametrize("item_id", ["", ".", ".."])
 def test_reply_rejects_invalid_item_ids_before_request(
     monkeypatch: pytest.MonkeyPatch,
@@ -469,6 +577,35 @@ def test_reply_text_is_required_keyword_only(monkeypatch: pytest.MonkeyPatch):
         scoped.reply("item_1")
 
     assert requests == []
+
+
+@pytest.mark.parametrize(
+    "idempotency_key",
+    [
+        "up_test_idem_secret\r\nX-Evil: injected",
+        "up_test_idem_secret\x00",
+        "up_test_idem_secret\x7f",
+        "up_test_idem_secret\x85",
+        "up_test_idem_secret🔐",
+    ],
+)
+def test_reply_rejects_unsafe_idempotency_keys_before_request(
+    monkeypatch: pytest.MonkeyPatch,
+    idempotency_key: str,
+):
+    requests, _calls = _stub_urlopen(monkeypatch, [])
+
+    with pytest.raises(ValueError) as raised:
+        _real_client().inbox.workspace().reply(
+            "item_1",
+            text="Thanks",
+            idempotency_key=idempotency_key,
+        )
+
+    assert requests == []
+    assert str(raised.value) == "Invalid idempotency_key."
+    assert "up_test_idem_secret" not in str(raised.value)
+    assert "up_test_idem_secret" not in repr(raised.value)
 
 
 @pytest.mark.parametrize(
@@ -652,6 +789,75 @@ def test_reply_429_is_not_slept_or_replayed(monkeypatch: pytest.MonkeyPatch):
 
     assert len(requests) == 1
     assert sleeps == []
+
+
+@pytest.mark.parametrize(
+    ("retry_after", "expected_retry_after"),
+    [
+        ("up_test_retry_secret", 1),
+        (["up_test_retry_secret"], 1),
+        ({"marker": "up_test_retry_secret"}, 1),
+        (10**9, 60),
+        (float("inf"), 1),
+        ("NaN", 1),
+        (True, 1),
+    ],
+)
+def test_reply_429_sanitizes_malformed_retry_after_body(
+    monkeypatch: pytest.MonkeyPatch,
+    retry_after: object,
+    expected_retry_after: int,
+):
+    requests, _calls = _stub_urlopen(
+        monkeypatch,
+        [_http_error(429, "RATE_LIMITED", retry_after=retry_after)],
+    )
+    sleeps = []
+    monkeypatch.setattr("unipost.http.time.sleep", sleeps.append)
+
+    with pytest.raises(RateLimitError) as raised:
+        _real_client().inbox.workspace().reply("item_1", text="Thanks")
+
+    assert len(requests) == 1
+    assert sleeps == []
+    assert raised.value.status == 429
+    assert raised.value.retry_after == expected_retry_after
+    assert "up_test_retry_secret" not in str(raised.value)
+    assert "up_test_retry_secret" not in repr(raised.value)
+
+
+@pytest.mark.parametrize(
+    ("retry_after_header", "expected_sleep"),
+    [
+        ("up_test_retry_header_secret", 1),
+        ("1000000000", 60),
+        ("Infinity", 1),
+    ],
+)
+def test_ordinary_request_sanitizes_retry_after_header_and_completes_retry(
+    monkeypatch: pytest.MonkeyPatch,
+    retry_after_header: str,
+    expected_sleep: int,
+):
+    requests, _calls = _stub_urlopen(
+        monkeypatch,
+        [
+            _http_error(
+                429,
+                "RATE_LIMITED",
+                retry_after_header=retry_after_header,
+            ),
+            _StubResponse(200, {"data": "ok"}),
+        ],
+    )
+    sleeps = []
+    monkeypatch.setattr("unipost.http.time.sleep", sleeps.append)
+
+    result = _real_client().inbox._http.request("GET", "/ordinary")
+
+    assert result == {"data": "ok"}
+    assert len(requests) == 2
+    assert sleeps == [expected_sleep]
 
 
 def test_ordinary_request_still_retries_429(monkeypatch: pytest.MonkeyPatch):

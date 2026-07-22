@@ -7,9 +7,9 @@ import ssl
 import time
 from dataclasses import dataclass
 from typing import Any, Iterator, Optional
-from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 from urllib.parse import urlencode
+from urllib.request import HTTPRedirectHandler, HTTPSHandler, Request, build_opener, urlopen
 
 from unipost.errors import parse_api_error
 
@@ -17,6 +17,7 @@ DEFAULT_BASE_URL = "https://api.unipost.dev"
 DEFAULT_TIMEOUT = 30
 MAX_RETRIES = 2
 SDK_VERSION = "0.5.0"
+_MAX_RETRY_AFTER_SECONDS = 60
 
 
 @dataclass(frozen=True)
@@ -24,6 +25,61 @@ class _HttpResponse:
     status: int
     headers: dict[str, str]
     body: Any
+
+
+class _NoRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise HTTPError(req.full_url, code, msg, headers, fp)
+
+
+def _open_request(
+    request: Request,
+    *,
+    timeout: int,
+    context: ssl.SSLContext,
+    follow_redirects: bool,
+):
+    if follow_redirects:
+        return urlopen(request, timeout=timeout, context=context)
+    opener = build_opener(
+        HTTPSHandler(context=context),
+        _NoRedirectHandler(),
+    )
+    return opener.open(request, timeout=timeout)
+
+
+def _coerce_retry_after(value: Any) -> int:
+    """Return a safe retry delay, capped to avoid server-controlled long sleeps."""
+    if isinstance(value, bool):
+        return 1
+    if isinstance(value, int):
+        parsed = value
+    elif isinstance(value, str):
+        stripped = value.strip()
+        if not stripped or not stripped.isascii() or not stripped.isdigit():
+            return 1
+        try:
+            parsed = int(stripped)
+        except ValueError:
+            return 1
+    else:
+        return 1
+    if parsed < 0:
+        return 1
+    return min(parsed, _MAX_RETRY_AFTER_SECONDS)
+
+
+def _sanitize_rate_limit_body(body: Any) -> Any:
+    if not isinstance(body, dict):
+        return body
+    error = body.get("error")
+    if not isinstance(error, dict):
+        return body
+    sanitized_error = dict(error)
+    sanitized_error["retry_after"] = _coerce_retry_after(error.get("retry_after", 1))
+    sanitized_body = dict(body)
+    sanitized_body["error"] = sanitized_error
+    return sanitized_body
 
 
 def _default_ssl_context() -> ssl.SSLContext:
@@ -76,6 +132,7 @@ class HttpClient:
         headers: Optional[dict[str, str]] = None,
         retry_rate_limits: bool = True,
         preserve_error_code: bool = False,
+        follow_redirects: bool = True,
     ) -> _HttpResponse:
         url = f"{self._base_url}{path}"
         if query:
@@ -97,7 +154,12 @@ class HttpClient:
         for attempt in range(MAX_RETRIES + 1):
             try:
                 req = Request(url, data=data, headers=req_headers, method=method)
-                with urlopen(req, timeout=self._timeout, context=self._ssl_ctx) as resp:
+                with _open_request(
+                    req,
+                    timeout=self._timeout,
+                    context=self._ssl_ctx,
+                    follow_redirects=follow_redirects,
+                ) as resp:
                     if resp.status == 204:
                         body_value = None
                     else:
@@ -116,6 +178,8 @@ class HttpClient:
                     resp_body = json.loads(e.read().decode("utf-8")) if e.fp else {}
                 except Exception:
                     resp_body = {}
+                if e.code == 429:
+                    resp_body = _sanitize_rate_limit_body(resp_body)
                 parsed_error = parse_api_error(e.code, resp_body)
                 if preserve_error_code and isinstance(resp_body, dict):
                     error_body = resp_body.get("error")
@@ -128,7 +192,9 @@ class HttpClient:
                     and e.code == 429
                     and attempt < MAX_RETRIES
                 ):
-                    retry_after = int(e.headers.get("Retry-After", "1"))
+                    retry_after = _coerce_retry_after(
+                        e.headers.get("Retry-After", "1") if e.headers else 1
+                    )
                     time.sleep(retry_after)
                     last_error = parsed_error
                     continue
@@ -168,12 +234,17 @@ class HttpClient:
                     resp_body = json.loads(e.read().decode("utf-8")) if e.fp else {}
                 except Exception:
                     resp_body = {}
+                if e.code == 429:
+                    resp_body = _sanitize_rate_limit_body(resp_body)
+                parsed_error = parse_api_error(e.code, resp_body)
                 if e.code == 429 and attempt < MAX_RETRIES:
-                    retry_after = int(e.headers.get("Retry-After", "1"))
+                    retry_after = _coerce_retry_after(
+                        e.headers.get("Retry-After", "1") if e.headers else 1
+                    )
                     time.sleep(retry_after)
-                    last_error = parse_api_error(e.code, resp_body)
+                    last_error = parsed_error
                     continue
-                raise parse_api_error(e.code, resp_body) from e
+                raise parsed_error from e
 
         raise last_error or Exception("Request failed after retries")
 
@@ -217,6 +288,8 @@ class HttpClient:
                 resp_body = json.loads(e.read().decode("utf-8")) if e.fp else {}
             except Exception:
                 resp_body = {}
+            if e.code == 429:
+                resp_body = _sanitize_rate_limit_body(resp_body)
             raise parse_api_error(e.code, resp_body) from e
 
     def post(

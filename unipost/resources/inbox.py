@@ -19,12 +19,68 @@ from unipost.types import (
 
 
 _RECONCILING_CODE = "X_REMOTE_ACCEPTED_RECONCILING"
+_INVALID_IDEMPOTENCY_KEY = "Invalid idempotency_key."
 
 
 def _encode_item_id(item_id: str) -> str:
     if item_id in {"", ".", ".."}:
         raise ValueError("item_id must not be empty, '.' or '..'")
     return quote(item_id, safe="")
+
+
+def _validate_idempotency_key(value: str) -> None:
+    try:
+        encoded = value.encode("latin-1")
+    except (AttributeError, UnicodeEncodeError):
+        raise ValueError(_INVALID_IDEMPOTENCY_KEY) from None
+    if any(byte < 32 or 127 <= byte <= 159 for byte in encoded):
+        raise ValueError(_INVALID_IDEMPOTENCY_KEY)
+
+
+def _decode_reply_response(
+    status: int,
+    headers: dict[str, str],
+    body: Any,
+) -> InboxReplyResult:
+    operation_id = headers.get("x-unipost-operation-id", "").strip()
+
+    if status == 200 and isinstance(body, dict):
+        data = body.get("data")
+        if isinstance(data, dict):
+            try:
+                item = _from_dict(InboxItem, data)
+            except (TypeError, ValueError):
+                pass
+            else:
+                return InboxReplyCompleted(
+                    item=item,
+                    operation_id=operation_id or None,
+                )
+
+    if (
+        status == 202
+        and operation_id
+        and isinstance(body, dict)
+        and "data" not in body
+    ):
+        error = body.get("error")
+        request_id = body.get("request_id")
+        request_id_is_valid = (
+            "request_id" not in body or isinstance(request_id, str)
+        )
+        if (
+            isinstance(error, dict)
+            and error.get("code") == _RECONCILING_CODE
+            and isinstance(error.get("message"), str)
+            and request_id_is_valid
+        ):
+            return InboxReplyReconciling(
+                operation_id=operation_id,
+                message=error["message"],
+                request_id=request_id,
+            )
+
+    raise ValueError(f"Failed to decode Inbox reply response with status {status}.")
 
 
 @dataclass(frozen=True)
@@ -88,6 +144,8 @@ class _ScopedInbox:
         idempotency_key: Optional[str] = None,
     ) -> InboxReplyResult:
         encoded_item_id = _encode_item_id(item_id)
+        if idempotency_key is not None:
+            _validate_idempotency_key(idempotency_key)
         headers = (
             {"Idempotency-Key": idempotency_key}
             if idempotency_key is not None
@@ -102,49 +160,13 @@ class _ScopedInbox:
                 headers=headers,
                 retry_rate_limits=False,
                 preserve_error_code=True,
+                follow_redirects=False,
             )
         except (JSONDecodeError, UnicodeDecodeError):
             raise ValueError("Failed to decode Inbox reply response.") from None
 
-        operation_id = response.headers.get("x-unipost-operation-id", "").strip()
-        body = response.body
-
-        if response.status == 200 and isinstance(body, dict):
-            data = body.get("data")
-            if isinstance(data, dict):
-                try:
-                    item = _from_dict(InboxItem, data)
-                except (TypeError, ValueError):
-                    pass
-                else:
-                    return InboxReplyCompleted(
-                        item=item,
-                        operation_id=operation_id or None,
-                    )
-
-        if (
-            response.status == 202
-            and operation_id
-            and isinstance(body, dict)
-            and "data" not in body
-        ):
-            error = body.get("error")
-            request_id = body.get("request_id")
-            request_id_is_valid = (
-                "request_id" not in body or isinstance(request_id, str)
-            )
-            if (
-                isinstance(error, dict)
-                and error.get("code") == _RECONCILING_CODE
-                and isinstance(error.get("message"), str)
-                and request_id_is_valid
-            ):
-                return InboxReplyReconciling(
-                    operation_id=operation_id,
-                    message=error["message"],
-                    request_id=request_id,
-                )
-
-        raise ValueError(
-            f"Failed to decode Inbox reply response with status {response.status}."
+        return _decode_reply_response(
+            response.status,
+            response.headers,
+            response.body,
         )
