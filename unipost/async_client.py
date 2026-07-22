@@ -10,10 +10,36 @@ from unipost.errors import parse_api_error
 from unipost.resources.inbox import (
     _build_list_query,
     _build_scope_query,
+    _decode_item,
     _decode_list_response,
+    _decode_mark_all_read,
+    _decode_media_context,
+    _decode_reply_response,
+    _decode_sync_response,
+    _decode_unread_count,
+    _decode_x_backfill_response,
+    _decode_x_outbound_status,
+    _encode_item_id,
+    _encode_request_id,
+    _serialize_x_backfill_request,
+    _validate_idempotency_key,
     _validate_managed_user_id,
 )
-from unipost.types import InboxListResponse, InboxReplyResult, InboxSource
+from unipost.types import (
+    InboxItem,
+    InboxListResponse,
+    InboxMarkAllReadResult,
+    InboxMediaContext,
+    InboxReplyResult,
+    InboxSource,
+    InboxSyncResult,
+    InboxThreadStatus,
+    InboxUnreadCountResult,
+    InboxWebSocketConnectionDetails,
+    XInboxBackfillRequest,
+    XInboxBackfillResult,
+    XInboxOutboundStatus,
+)
 
 DEFAULT_BASE_URL = "https://api.unipost.dev"
 DEFAULT_TIMEOUT = 30
@@ -135,6 +161,19 @@ class AsyncHttpClient:
 
     async def get(self, path: str, query: Optional[dict[str, Any]] = None) -> Any:
         return await self.request("GET", path, query=query)
+
+    def _websocket_connection_details(
+        self,
+        *,
+        query: dict[str, str],
+    ) -> InboxWebSocketConnectionDetails:
+        from unipost.resources.inbox import _build_websocket_connection_details
+
+        return _build_websocket_connection_details(
+            self._base_url,
+            self._api_key,
+            query,
+        )
 
     async def post(self, path: str, body: Any = None, headers: Optional[dict[str, str]] = None) -> Any:
         return await self.request("POST", path, body=body, headers=headers)
@@ -432,6 +471,29 @@ class _AsyncScopedInbox:
     def _scope_query(self) -> dict[str, str]:
         return _build_scope_query(self._scope, self._external_user_id)
 
+    async def _post(
+        self,
+        path: str,
+        body: Any,
+        *,
+        headers: Optional[dict[str, str]] = None,
+        preserve_error_code: bool = False,
+        decode_error_message: str = "Failed to decode Inbox response.",
+    ) -> _AsyncHttpResponse:
+        try:
+            return await self._http._request_with_response(
+                "POST",
+                path,
+                body=body,
+                query=self._scope_query(),
+                headers=headers,
+                retry_rate_limits=False,
+                preserve_error_code=preserve_error_code,
+                follow_redirects=False,
+            )
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            raise ValueError(decode_error_message) from None
+
     async def list(
         self,
         *,
@@ -450,6 +512,87 @@ class _AsyncScopedInbox:
         response = await self._http.get("/v1/inbox", query=query)
         return _decode_list_response(response)
 
+    async def unread_count(self) -> InboxUnreadCountResult:
+        response = await self._http.get(
+            "/v1/inbox/unread-count",
+            query=self._scope_query(),
+        )
+        return _decode_unread_count(response)
+
+    async def get(self, item_id: str) -> InboxItem:
+        encoded_item_id = _encode_item_id(item_id)
+        response = await self._http.get(
+            f"/v1/inbox/{encoded_item_id}",
+            query=self._scope_query(),
+        )
+        return _decode_item(response)
+
+    async def mark_read(self, item_id: str) -> None:
+        encoded_item_id = _encode_item_id(item_id)
+        await self._post(f"/v1/inbox/{encoded_item_id}/read", None)
+
+    async def mark_all_read(self) -> InboxMarkAllReadResult:
+        response = await self._post("/v1/inbox/mark-all-read", None)
+        return _decode_mark_all_read(response.body)
+
+    async def update_thread_state(
+        self,
+        item_id: str,
+        *,
+        thread_status: InboxThreadStatus,
+        assigned_to: Optional[str] = None,
+    ) -> InboxItem:
+        encoded_item_id = _encode_item_id(item_id)
+        if thread_status not in {"open", "assigned", "resolved"}:
+            raise ValueError("Invalid thread_status.")
+        body: dict[str, str] = {"thread_status": thread_status}
+        if assigned_to is not None:
+            body["assigned_to"] = assigned_to
+        response = await self._post(
+            f"/v1/inbox/{encoded_item_id}/thread-state",
+            body,
+        )
+        return _decode_item(response.body)
+
+    async def media_context(self, item_id: str) -> InboxMediaContext:
+        encoded_item_id = _encode_item_id(item_id)
+        response = await self._http.get(
+            f"/v1/inbox/{encoded_item_id}/media-context",
+            query=self._scope_query(),
+        )
+        return _decode_media_context(response)
+
+    async def sync(
+        self,
+        *,
+        x_backfill: Optional[XInboxBackfillRequest] = None,
+    ) -> Union[InboxSyncResult, XInboxBackfillResult]:
+        body = (
+            {}
+            if x_backfill is None
+            else {"x_backfill": _serialize_x_backfill_request(x_backfill)}
+        )
+        response = await self._post("/v1/inbox/sync", body)
+        if x_backfill is None:
+            return _decode_sync_response(response.body)
+        return _decode_x_backfill_response(response.body)
+
+    async def x_outbound_status(
+        self,
+        request_id: str,
+    ) -> XInboxOutboundStatus:
+        encoded_request_id = _encode_request_id(request_id)
+        response = await self._http.get(
+            f"/v1/inbox/x-outbound-operations/{encoded_request_id}",
+            query=self._scope_query(),
+        )
+        return _decode_x_outbound_status(response)
+
+    def websocket_connection_details(self) -> InboxWebSocketConnectionDetails:
+        return self._http._websocket_connection_details(
+            query=self._scope_query(),
+        )
+
     async def reply(
         self,
         item_id: str,
@@ -457,12 +600,6 @@ class _AsyncScopedInbox:
         text: str,
         idempotency_key: Optional[str] = None,
     ) -> InboxReplyResult:
-        from unipost.resources.inbox import (
-            _decode_reply_response,
-            _encode_item_id,
-            _validate_idempotency_key,
-        )
-
         encoded_item_id = _encode_item_id(item_id)
         if idempotency_key is not None:
             _validate_idempotency_key(idempotency_key)
@@ -471,19 +608,13 @@ class _AsyncScopedInbox:
             if idempotency_key is not None
             else None
         )
-        try:
-            response = await self._http._request_with_response(
-                "POST",
-                f"/v1/inbox/{encoded_item_id}/reply",
-                body={"text": text},
-                query=self._scope_query(),
-                headers=headers,
-                retry_rate_limits=False,
-                preserve_error_code=True,
-                follow_redirects=False,
-            )
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            raise ValueError("Failed to decode Inbox reply response.") from None
+        response = await self._post(
+            f"/v1/inbox/{encoded_item_id}/reply",
+            {"text": text},
+            headers=headers,
+            preserve_error_code=True,
+            decode_error_message="Failed to decode Inbox reply response.",
+        )
 
         return _decode_reply_response(
             response.status,

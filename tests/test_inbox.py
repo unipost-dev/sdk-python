@@ -6,6 +6,7 @@ import json
 import inspect
 from socketserver import TCPServer
 from threading import Thread
+from typing import Optional
 from urllib.parse import parse_qs, urlsplit
 from urllib.error import HTTPError
 from urllib.request import Request
@@ -379,7 +380,7 @@ def test_shared_inbox_scope_and_list_helpers_preserve_contract():
 )
 def test_shared_scope_query_rejects_invalid_scope_id_correlations(
     scope: str,
-    external_user_id: str | None,
+    external_user_id: Optional[str],
 ):
     with pytest.raises(ValueError):
         inbox_resource._build_scope_query(scope, external_user_id)
@@ -418,8 +419,8 @@ class _StubResponse:
         status: int,
         body: object = None,
         *,
-        headers: dict[str, str] | None = None,
-        raw_body: bytes | None = None,
+        headers: Optional[dict[str, str]] = None,
+        raw_body: Optional[bytes] = None,
     ) -> None:
         self.status = status
         self.headers = headers or {}
@@ -1787,3 +1788,1084 @@ async def test_async_reply_does_not_follow_redirect_or_make_second_request(
     assert [request.url.path for request in requests] == [
         "/v1/inbox/item_1/reply"
     ]
+
+
+def test_remaining_inbox_types_are_public_in_types_module():
+    expected = {
+        "InboxUnreadCountResult",
+        "InboxMarkAllReadResult",
+        "InboxMediaContext",
+        "XInboxBackfillRequest",
+        "InboxSyncError",
+        "InboxSyncAccountDetail",
+        "InboxSyncResult",
+        "XInboxBackfillAccountResult",
+        "XInboxBackfillInProgress",
+        "XInboxBackfillConfirmationRequired",
+        "XInboxBackfillCompleted",
+        "XInboxBackfillResult",
+        "XInboxOutboundStatus",
+        "InboxWebSocketConnectionDetails",
+    }
+
+    missing = sorted(name for name in expected if not hasattr(types, name))
+
+    assert missing == []
+
+
+def test_remaining_sync_and_async_inbox_methods_have_signature_parity():
+    sync_scoped = Inbox(FakeHTTP()).workspace()
+    async_scoped = _async_client().inbox.workspace()
+    method_names = [
+        "unread_count",
+        "get",
+        "mark_read",
+        "mark_all_read",
+        "update_thread_state",
+        "media_context",
+        "sync",
+        "x_outbound_status",
+        "websocket_connection_details",
+    ]
+
+    missing_sync = [name for name in method_names if not hasattr(sync_scoped, name)]
+    missing_async = [name for name in method_names if not hasattr(async_scoped, name)]
+
+    assert missing_sync == []
+    assert missing_async == []
+    for name in method_names:
+        assert inspect.signature(getattr(sync_scoped, name)) == inspect.signature(
+            getattr(async_scoped, name)
+        )
+
+
+_MEDIA_CONTEXT_PAYLOAD = {
+    "id": "media_1",
+    "caption": "Launch day",
+    "media_url": "https://cdn.example.test/media.jpg",
+    "timestamp": "2026-07-22T12:00:00Z",
+    "media_type": "IMAGE",
+    "permalink": "https://social.example.test/post/1",
+    "unknown": "ignored",
+}
+
+_OUTBOUND_STATUS_PAYLOAD = {
+    "id": "operation_1",
+    "status": "reconciling",
+    "completion_attempts": 2,
+    "reconciliation_required": True,
+    "updated_at": "2026-07-22T12:00:00Z",
+    "reconciliation_deadline": "2026-07-22T12:05:00Z",
+    "response_inbox_item_id": "inbox_2",
+    "unknown": "ignored",
+}
+
+_SYNC_PAYLOAD = {
+    "new_items": 4,
+    "accounts_checked": 2,
+    "errors": [
+        {
+            "account_id": "account_2",
+            "platform": "instagram",
+            "step": "comments",
+            "error": "permission denied",
+            "unknown": "ignored",
+        }
+    ],
+    "details": [
+        {
+            "account_id": "account_1",
+            "platform": "instagram",
+            "account_name": "UniPost",
+            "media_found": 3,
+            "comments_found": 4,
+            "unknown": "ignored",
+        }
+    ],
+    "unknown": "ignored",
+}
+
+_BACKFILL_DETAIL_PAYLOAD = {
+    "account_id": "account_x",
+    "accepted": 7,
+    "suppressed": 2,
+    "duplicates": 1,
+    "read": 10,
+    "stopped_at_boundary": True,
+    "stop_reason": "lookback_boundary",
+    "missing_scopes": ["dm.read"],
+    "unknown": "ignored",
+}
+
+
+@pytest.mark.parametrize(
+    ("method_name", "arguments", "path", "response_body", "type_name", "fields"),
+    [
+        (
+            "unread_count",
+            (),
+            "/v1/inbox/unread-count",
+            {"count": 3, "unknown": "ignored"},
+            "InboxUnreadCountResult",
+            {"count": 3},
+        ),
+        (
+            "get",
+            ("item /?#",),
+            "/v1/inbox/item%20%2F%3F%23",
+            {**_reply_item_payload(), "unknown": "ignored"},
+            "InboxItem",
+            _reply_item_payload(),
+        ),
+        (
+            "media_context",
+            ("item /?#",),
+            "/v1/inbox/item%20%2F%3F%23/media-context",
+            _MEDIA_CONTEXT_PAYLOAD,
+            "InboxMediaContext",
+            {key: value for key, value in _MEDIA_CONTEXT_PAYLOAD.items() if key != "unknown"},
+        ),
+        (
+            "x_outbound_status",
+            ("request /?#",),
+            "/v1/inbox/x-outbound-operations/request%20%2F%3F%23",
+            _OUTBOUND_STATUS_PAYLOAD,
+            "XInboxOutboundStatus",
+            {key: value for key, value in _OUTBOUND_STATUS_PAYLOAD.items() if key != "unknown"},
+        ),
+    ],
+)
+def test_remaining_sync_get_routes_encode_ids_and_decode_typed_results(
+    monkeypatch: pytest.MonkeyPatch,
+    method_name: str,
+    arguments: tuple[str, ...],
+    path: str,
+    response_body: dict[str, object],
+    type_name: str,
+    fields: dict[str, object],
+):
+    requests, calls = _stub_urlopen(
+        monkeypatch,
+        [_StubResponse(200, response_body)],
+    )
+
+    result = getattr(_real_client().inbox.managed_user("user A"), method_name)(
+        *arguments
+    )
+
+    assert len(requests) == 1
+    assert requests[0].method == "GET"
+    assert urlsplit(requests[0].full_url).path == path
+    assert parse_qs(urlsplit(requests[0].full_url).query) == {
+        "inbox_scope": ["managed_user"],
+        "external_user_id": ["user A"],
+    }
+    assert requests[0].data is None
+    assert calls[0][2] is True
+    assert isinstance(result, getattr(types, type_name))
+    for name, value in fields.items():
+        assert getattr(result, name) == value
+    assert not hasattr(result, "unknown")
+
+
+@pytest.mark.parametrize(
+    ("method_name", "arguments", "kwargs"),
+    [
+        ("get", ("",), {}),
+        ("get", (".",), {}),
+        ("mark_read", ("..",), {}),
+        ("update_thread_state", ("",), {"thread_status": "open"}),
+        ("media_context", (".",), {}),
+        ("x_outbound_status", ("",), {}),
+        ("x_outbound_status", (".",), {}),
+        ("x_outbound_status", ("..",), {}),
+    ],
+)
+def test_remaining_sync_path_ids_reject_unsafe_segments_before_request(
+    monkeypatch: pytest.MonkeyPatch,
+    method_name: str,
+    arguments: tuple[str, ...],
+    kwargs: dict[str, object],
+):
+    requests, _calls = _stub_urlopen(monkeypatch, [])
+
+    with pytest.raises(ValueError, match="^(item_id|request_id)"):
+        getattr(_real_client().inbox.workspace(), method_name)(
+            *arguments,
+            **kwargs,
+        )
+
+    assert requests == []
+
+
+@pytest.mark.parametrize("thread_status", ["open", "assigned", "resolved"])
+@pytest.mark.parametrize("assigned_to", [None, "operator_1"])
+def test_sync_update_thread_state_accepts_canonical_statuses_and_exact_body(
+    monkeypatch: pytest.MonkeyPatch,
+    thread_status: str,
+    assigned_to: Optional[str],
+):
+    payload = {**_reply_item_payload(), "thread_status": thread_status}
+    requests, calls = _stub_urlopen(monkeypatch, [_StubResponse(200, payload)])
+
+    result = _real_client().inbox.workspace().update_thread_state(
+        "item /?#",
+        thread_status=thread_status,
+        assigned_to=assigned_to,
+    )
+
+    expected_body = {"thread_status": thread_status}
+    if assigned_to is not None:
+        expected_body["assigned_to"] = assigned_to
+    assert len(requests) == 1
+    assert requests[0].method == "POST"
+    assert urlsplit(requests[0].full_url).path == (
+        "/v1/inbox/item%20%2F%3F%23/thread-state"
+    )
+    assert json.loads(requests[0].data.decode("utf-8")) == expected_body
+    assert calls[0][2] is False
+    assert isinstance(result, types.InboxItem)
+    assert result.thread_status == thread_status
+
+
+def test_sync_update_thread_state_rejects_unknown_status_before_request(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    requests, _calls = _stub_urlopen(monkeypatch, [])
+
+    with pytest.raises(ValueError, match=r"^Invalid thread_status\.$"):
+        _real_client().inbox.workspace().update_thread_state(
+            "item_1",
+            thread_status="pending",
+        )
+
+    assert requests == []
+
+
+@pytest.mark.parametrize(
+    ("method_name", "arguments", "kwargs", "path", "status", "body", "expected"),
+    [
+        (
+            "mark_read",
+            ("item /?#",),
+            {},
+            "/v1/inbox/item%20%2F%3F%23/read",
+            204,
+            None,
+            None,
+        ),
+        (
+            "mark_all_read",
+            (),
+            {},
+            "/v1/inbox/mark-all-read",
+            200,
+            {"marked": 5, "unknown": "ignored"},
+            ("InboxMarkAllReadResult", {"marked": 5}),
+        ),
+        (
+            "sync",
+            (),
+            {},
+            "/v1/inbox/sync",
+            200,
+            _SYNC_PAYLOAD,
+            (
+                "InboxSyncResult",
+                {"new_items": 4, "accounts_checked": 2},
+            ),
+        ),
+    ],
+)
+def test_remaining_sync_post_routes_send_exact_body_and_decode_results(
+    monkeypatch: pytest.MonkeyPatch,
+    method_name: str,
+    arguments: tuple[str, ...],
+    kwargs: dict[str, object],
+    path: str,
+    status: int,
+    body: object,
+    expected: object,
+):
+    requests, calls = _stub_urlopen(
+        monkeypatch,
+        [_StubResponse(status, body)],
+    )
+
+    result = getattr(_real_client().inbox.workspace(), method_name)(
+        *arguments,
+        **kwargs,
+    )
+
+    assert len(requests) == 1
+    assert requests[0].method == "POST"
+    assert urlsplit(requests[0].full_url).path == path
+    assert parse_qs(urlsplit(requests[0].full_url).query) == {
+        "inbox_scope": ["workspace"]
+    }
+    expected_request_body = {} if method_name == "sync" else None
+    assert (
+        json.loads(requests[0].data.decode("utf-8"))
+        if requests[0].data is not None
+        else None
+    ) == expected_request_body
+    assert calls[0][2] is False
+    if expected is None:
+        assert result is None
+    else:
+        type_name, expected_fields = expected
+        assert isinstance(result, getattr(types, type_name))
+        for name, value in expected_fields.items():
+            assert getattr(result, name) == value
+    if method_name == "sync":
+        assert isinstance(result.errors[0], types.InboxSyncError)
+        assert isinstance(result.details[0], types.InboxSyncAccountDetail)
+        assert result.errors[0].error == "permission denied"
+        assert result.details[0].comments_found == 4
+
+
+def test_x_backfill_request_is_frozen_and_serializes_every_supplied_field(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    request = types.XInboxBackfillRequest(
+        include_replies=False,
+        include_dms=True,
+        account_id="account_x",
+        lookback_days=30,
+        max_items=100,
+        confirmation_token="token-exact-value",
+    )
+    with pytest.raises(AttributeError):
+        request.confirmation_token = "changed"
+    response = {
+        "status": "in_progress",
+        "confirmation_operation_id": "operation_x",
+        "execution_lease_expires_at": "2026-07-22T12:05:00Z",
+    }
+    requests, calls = _stub_urlopen(
+        monkeypatch,
+        [_StubResponse(200, response)],
+    )
+
+    result = _real_client().inbox.workspace().sync(x_backfill=request)
+
+    assert json.loads(requests[0].data.decode("utf-8")) == {
+        "x_backfill": {
+            "include_replies": False,
+            "include_dms": True,
+            "account_id": "account_x",
+            "lookback_days": 30,
+            "max_items": 100,
+            "confirmation_token": "token-exact-value",
+        }
+    }
+    assert calls[0][2] is False
+    assert isinstance(result, types.XInboxBackfillInProgress)
+
+
+@pytest.mark.parametrize(
+    ("payload", "type_name", "discriminant"),
+    [
+        (
+            {
+                "status": "in_progress",
+                "confirmation_operation_id": "operation_x",
+                "execution_lease_expires_at": "2026-07-22T12:05:00Z",
+                "estimated_x_credits": 12,
+                "confirmation_required": False,
+                "confirmation_token": "token_in_progress",
+                "confirmation_expires_at": "2026-07-22T12:02:00Z",
+                "accounts_checked": 1,
+                "accepted": 7,
+                "suppressed": 2,
+                "duplicates": 1,
+                "read": 10,
+                "details": [_BACKFILL_DETAIL_PAYLOAD],
+                "unknown": "ignored",
+            },
+            "XInboxBackfillInProgress",
+            ("status", "in_progress"),
+        ),
+        (
+            {
+                "confirmation_required": True,
+                "confirmation_token": "token_confirm",
+                "confirmation_expires_at": "2026-07-22T12:02:00Z",
+                "accounts_checked": 1,
+                "estimated_x_credits": 12,
+                "confirmation_operation_id": "operation_x",
+                "execution_lease_expires_at": "2026-07-22T12:05:00Z",
+                "accepted": 7,
+                "suppressed": 2,
+                "duplicates": 1,
+                "read": 10,
+                "details": [_BACKFILL_DETAIL_PAYLOAD],
+                "unknown": "ignored",
+            },
+            "XInboxBackfillConfirmationRequired",
+            ("confirmation_required", True),
+        ),
+        (
+            {
+                "confirmation_required": False,
+                "accounts_checked": 1,
+                "accepted": 7,
+                "suppressed": 2,
+                "duplicates": 1,
+                "read": 10,
+                "estimated_x_credits": 12,
+                "confirmation_operation_id": "operation_x",
+                "confirmation_token": "token_completed",
+                "confirmation_expires_at": "2026-07-22T12:02:00Z",
+                "execution_lease_expires_at": "2026-07-22T12:05:00Z",
+                "details": [_BACKFILL_DETAIL_PAYLOAD],
+                "unknown": "ignored",
+            },
+            "XInboxBackfillCompleted",
+            ("confirmation_required", False),
+        ),
+    ],
+)
+def test_sync_decodes_each_exact_x_backfill_discriminant_and_nested_details(
+    monkeypatch: pytest.MonkeyPatch,
+    payload: dict[str, object],
+    type_name: str,
+    discriminant: tuple[str, object],
+):
+    requests, _calls = _stub_urlopen(
+        monkeypatch,
+        [_StubResponse(200, payload)],
+    )
+
+    result = _real_client().inbox.workspace().sync(
+        x_backfill=types.XInboxBackfillRequest(
+            include_replies=True,
+            include_dms=False,
+        )
+    )
+
+    assert len(requests) == 1
+    assert isinstance(result, getattr(types, type_name))
+    assert getattr(result, discriminant[0]) == discriminant[1]
+    assert result.details is not None
+    assert isinstance(result.details[0], types.XInboxBackfillAccountResult)
+    assert result.details[0].missing_scopes == ["dm.read"]
+    assert not hasattr(result, "unknown")
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"status": "in_progress"},
+        {"status": "queued", "confirmation_required": False},
+        {"confirmation_required": True, "accounts_checked": 1},
+        {
+            "confirmation_required": False,
+            "accounts_checked": 1,
+            "accepted": 1,
+        },
+        {"confirmation_required": "false"},
+    ],
+)
+def test_sync_x_backfill_missing_or_invalid_structure_fails_closed_safely(
+    monkeypatch: pytest.MonkeyPatch,
+    payload: dict[str, object],
+):
+    requests, _calls = _stub_urlopen(
+        monkeypatch,
+        [_StubResponse(200, payload)],
+    )
+
+    with pytest.raises(ValueError) as raised:
+        _real_client().inbox.workspace().sync(
+            x_backfill=types.XInboxBackfillRequest(
+                include_replies=True,
+                include_dms=True,
+                confirmation_token="token-must-not-leak",
+            )
+        )
+
+    assert len(requests) == 1
+    assert str(raised.value) == "Failed to decode Inbox response."
+    assert "token-must-not-leak" not in repr(raised.value)
+
+
+@pytest.mark.parametrize(
+    ("method_name", "arguments", "kwargs"),
+    [
+        ("reply", ("item_1",), {"text": "Thanks"}),
+        ("mark_read", ("item_1",), {}),
+        ("mark_all_read", (), {}),
+        (
+            "update_thread_state",
+            ("item_1",),
+            {"thread_status": "resolved"},
+        ),
+        ("sync", (), {}),
+    ],
+)
+@pytest.mark.parametrize("failure_kind", ["rate_limit", "redirect"])
+def test_every_sync_inbox_write_is_single_attempt_and_never_follows_redirects(
+    monkeypatch: pytest.MonkeyPatch,
+    method_name: str,
+    arguments: tuple[str, ...],
+    kwargs: dict[str, object],
+    failure_kind: str,
+):
+    error = (
+        _http_error(429, "RATE_LIMITED")
+        if failure_kind == "rate_limit"
+        else _http_error(302, "REDIRECT")
+    )
+    requests, calls = _stub_urlopen(monkeypatch, [error])
+    sleeps: list[object] = []
+    monkeypatch.setattr("unipost.http.time.sleep", sleeps.append)
+
+    with pytest.raises(UniPostError):
+        getattr(_real_client().inbox.workspace(), method_name)(
+            *arguments,
+            **kwargs,
+        )
+
+    assert len(requests) == 1
+    assert calls[0][2] is False
+    assert sleeps == []
+
+
+def test_non_reply_sync_write_uses_ordinary_error_code_precedence(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    requests, _calls = _stub_urlopen(
+        monkeypatch,
+        [
+            _http_error(
+                409,
+                "RAW_WRITE_CODE",
+                normalized_code="NORMALIZED_WRITE_CODE",
+            )
+        ],
+    )
+
+    with pytest.raises(UniPostError) as raised:
+        _real_client().inbox.workspace().mark_read("item_1")
+
+    assert len(requests) == 1
+    assert raised.value.code == "NORMALIZED_WRITE_CODE"
+
+
+@pytest.mark.parametrize("scheme", ["https", "http"])
+@pytest.mark.parametrize("scope", ["workspace", "managed_user"])
+def test_sync_websocket_details_are_local_scoped_secret_safe_and_immutable(
+    monkeypatch: pytest.MonkeyPatch,
+    scheme: str,
+    scope: str,
+):
+    monkeypatch.setattr(
+        "unipost.http._open_request",
+        lambda *_args, **_kwargs: pytest.fail("network request was not expected"),
+    )
+    client = UniPost(
+        api_key="up_test_websocket_secret",
+        base_url=f"{scheme}://api.example.test/base?ignored=yes#fragment",
+    )
+    scoped = (
+        client.inbox.workspace()
+        if scope == "workspace"
+        else client.inbox.managed_user("user A")
+    )
+
+    first = scoped.websocket_connection_details()
+    second = scoped.websocket_connection_details()
+
+    expected_scheme = "wss" if scheme == "https" else "ws"
+    assert urlsplit(first.url).scheme == expected_scheme
+    assert urlsplit(first.url).netloc == "api.example.test"
+    assert urlsplit(first.url).path == "/v1/inbox/ws"
+    expected_query = {"inbox_scope": [scope]}
+    if scope == "managed_user":
+        expected_query["external_user_id"] = ["user A"]
+    assert parse_qs(urlsplit(first.url).query) == expected_query
+    assert "up_test_websocket_secret" not in first.url
+    assert dict(first.headers) == {
+        "Authorization": "Bearer up_test_websocket_secret"
+    }
+    assert first is not second
+    assert first.headers is not second.headers
+    with pytest.raises(TypeError):
+        first.headers["Authorization"] = "changed"
+    with pytest.raises(AttributeError):
+        first.url = "changed"
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "ftp://api.example.test/up_test_invalid_secret",
+        "api.example.test/up_test_invalid_secret",
+        "https:///up_test_invalid_secret",
+        "https://api.example.test:not-a-port/up_test_invalid_secret",
+        "https://api example.test/up_test_invalid_secret",
+    ],
+)
+def test_sync_websocket_invalid_base_fails_with_fixed_safe_error(base_url: str):
+    scoped = UniPost(
+        api_key="up_test_websocket_secret",
+        base_url=base_url,
+    ).inbox.workspace()
+
+    with pytest.raises(ValueError) as raised:
+        scoped.websocket_connection_details()
+
+    assert str(raised.value) == "Invalid WebSocket base URL."
+    assert "secret" not in repr(raised.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method_name", "arguments", "path", "response_body", "type_name", "fields"),
+    [
+        (
+            "unread_count",
+            (),
+            "/v1/inbox/unread-count",
+            {"count": 3, "unknown": "ignored"},
+            "InboxUnreadCountResult",
+            {"count": 3},
+        ),
+        (
+            "get",
+            ("item /?#",),
+            "/v1/inbox/item /?#",
+            {**_reply_item_payload(), "unknown": "ignored"},
+            "InboxItem",
+            _reply_item_payload(),
+        ),
+        (
+            "media_context",
+            ("item /?#",),
+            "/v1/inbox/item /?#/media-context",
+            _MEDIA_CONTEXT_PAYLOAD,
+            "InboxMediaContext",
+            {key: value for key, value in _MEDIA_CONTEXT_PAYLOAD.items() if key != "unknown"},
+        ),
+        (
+            "x_outbound_status",
+            ("request /?#",),
+            "/v1/inbox/x-outbound-operations/request /?#",
+            _OUTBOUND_STATUS_PAYLOAD,
+            "XInboxOutboundStatus",
+            {key: value for key, value in _OUTBOUND_STATUS_PAYLOAD.items() if key != "unknown"},
+        ),
+    ],
+)
+async def test_remaining_async_get_routes_encode_ids_and_decode_typed_results(
+    monkeypatch: pytest.MonkeyPatch,
+    method_name: str,
+    arguments: tuple[str, ...],
+    path: str,
+    response_body: dict[str, object],
+    type_name: str,
+    fields: dict[str, object],
+):
+    requests, client_options = _install_async_transport(
+        monkeypatch,
+        lambda _request: httpx.Response(200, json=response_body),
+    )
+
+    result = await getattr(
+        _async_client().inbox.managed_user("user A"),
+        method_name,
+    )(*arguments)
+
+    assert len(requests) == 1
+    assert requests[0].method == "GET"
+    assert requests[0].url.path == path
+    expected_raw_paths = {
+        "get": b"/v1/inbox/item%20%2F%3F%23",
+        "media_context": b"/v1/inbox/item%20%2F%3F%23/media-context",
+        "x_outbound_status": (
+            b"/v1/inbox/x-outbound-operations/request%20%2F%3F%23"
+        ),
+    }
+    if method_name in expected_raw_paths:
+        assert requests[0].url.raw_path.split(b"?")[0] == expected_raw_paths[
+            method_name
+        ]
+    assert parse_qs(requests[0].url.query.decode("ascii")) == {
+        "inbox_scope": ["managed_user"],
+        "external_user_id": ["user A"],
+    }
+    assert client_options == [{"timeout": 5, "follow_redirects": False}]
+    assert isinstance(result, getattr(types, type_name))
+    for name, value in fields.items():
+        assert getattr(result, name) == value
+    assert not hasattr(result, "unknown")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method_name", "arguments", "kwargs"),
+    [
+        ("get", ("",), {}),
+        ("get", (".",), {}),
+        ("mark_read", ("..",), {}),
+        ("update_thread_state", ("",), {"thread_status": "open"}),
+        ("media_context", (".",), {}),
+        ("x_outbound_status", ("",), {}),
+        ("x_outbound_status", (".",), {}),
+        ("x_outbound_status", ("..",), {}),
+    ],
+)
+async def test_remaining_async_path_ids_reject_unsafe_segments_before_request(
+    monkeypatch: pytest.MonkeyPatch,
+    method_name: str,
+    arguments: tuple[str, ...],
+    kwargs: dict[str, object],
+):
+    requests, _client_options = _install_async_transport(
+        monkeypatch,
+        lambda _request: pytest.fail("network request was not expected"),
+    )
+
+    with pytest.raises(ValueError, match="^(item_id|request_id)"):
+        await getattr(_async_client().inbox.workspace(), method_name)(
+            *arguments,
+            **kwargs,
+        )
+
+    assert requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("thread_status", ["open", "assigned", "resolved"])
+@pytest.mark.parametrize("assigned_to", [None, "operator_1"])
+async def test_async_update_thread_state_exact_body_and_typed_result(
+    monkeypatch: pytest.MonkeyPatch,
+    thread_status: str,
+    assigned_to: Optional[str],
+):
+    payload = {**_reply_item_payload(), "thread_status": thread_status}
+    requests, client_options = _install_async_transport(
+        monkeypatch,
+        lambda _request: httpx.Response(200, json=payload),
+    )
+
+    result = await _async_client().inbox.workspace().update_thread_state(
+        "item /?#",
+        thread_status=thread_status,
+        assigned_to=assigned_to,
+    )
+
+    expected_body = {"thread_status": thread_status}
+    if assigned_to is not None:
+        expected_body["assigned_to"] = assigned_to
+    assert len(requests) == 1
+    assert requests[0].method == "POST"
+    assert requests[0].url.path == "/v1/inbox/item /?#/thread-state"
+    assert json.loads(requests[0].content.decode("utf-8")) == expected_body
+    assert client_options == [{"timeout": 5, "follow_redirects": False}]
+    assert isinstance(result, types.InboxItem)
+    assert result.thread_status == thread_status
+
+
+@pytest.mark.asyncio
+async def test_async_update_thread_state_rejects_unknown_status_before_request(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    requests, _client_options = _install_async_transport(
+        monkeypatch,
+        lambda _request: pytest.fail("network request was not expected"),
+    )
+
+    with pytest.raises(ValueError, match=r"^Invalid thread_status\.$"):
+        await _async_client().inbox.workspace().update_thread_state(
+            "item_1",
+            thread_status="pending",
+        )
+
+    assert requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method_name", "arguments", "kwargs", "path", "status", "body", "expected"),
+    [
+        (
+            "mark_read",
+            ("item /?#",),
+            {},
+            "/v1/inbox/item /?#/read",
+            204,
+            None,
+            None,
+        ),
+        (
+            "mark_all_read",
+            (),
+            {},
+            "/v1/inbox/mark-all-read",
+            200,
+            {"marked": 5, "unknown": "ignored"},
+            ("InboxMarkAllReadResult", {"marked": 5}),
+        ),
+        (
+            "sync",
+            (),
+            {},
+            "/v1/inbox/sync",
+            200,
+            _SYNC_PAYLOAD,
+            (
+                "InboxSyncResult",
+                {"new_items": 4, "accounts_checked": 2},
+            ),
+        ),
+    ],
+)
+async def test_remaining_async_post_routes_exact_body_and_typed_results(
+    monkeypatch: pytest.MonkeyPatch,
+    method_name: str,
+    arguments: tuple[str, ...],
+    kwargs: dict[str, object],
+    path: str,
+    status: int,
+    body: object,
+    expected: object,
+):
+    def handler(_request: httpx.Request) -> httpx.Response:
+        if body is None:
+            return httpx.Response(status)
+        return httpx.Response(status, json=body)
+
+    requests, client_options = _install_async_transport(monkeypatch, handler)
+
+    result = await getattr(_async_client().inbox.workspace(), method_name)(
+        *arguments,
+        **kwargs,
+    )
+
+    assert len(requests) == 1
+    assert requests[0].method == "POST"
+    assert requests[0].url.path == path
+    assert parse_qs(requests[0].url.query.decode("ascii")) == {
+        "inbox_scope": ["workspace"]
+    }
+    expected_request_body = {} if method_name == "sync" else None
+    assert (
+        json.loads(requests[0].content.decode("utf-8"))
+        if requests[0].content
+        else None
+    ) == expected_request_body
+    assert client_options == [{"timeout": 5, "follow_redirects": False}]
+    if expected is None:
+        assert result is None
+    else:
+        type_name, expected_fields = expected
+        assert isinstance(result, getattr(types, type_name))
+        for name, value in expected_fields.items():
+            assert getattr(result, name) == value
+    if method_name == "sync":
+        assert isinstance(result.errors[0], types.InboxSyncError)
+        assert isinstance(result.details[0], types.InboxSyncAccountDetail)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("payload", "type_name"),
+    [
+        (
+            {
+                "status": "in_progress",
+                "confirmation_operation_id": "operation_x",
+                "execution_lease_expires_at": "2026-07-22T12:05:00Z",
+                "details": [_BACKFILL_DETAIL_PAYLOAD],
+            },
+            "XInboxBackfillInProgress",
+        ),
+        (
+            {
+                "confirmation_required": True,
+                "confirmation_token": "token_confirm",
+                "confirmation_expires_at": "2026-07-22T12:02:00Z",
+                "accounts_checked": 1,
+                "details": [_BACKFILL_DETAIL_PAYLOAD],
+            },
+            "XInboxBackfillConfirmationRequired",
+        ),
+        (
+            {
+                "confirmation_required": False,
+                "accounts_checked": 1,
+                "accepted": 7,
+                "suppressed": 2,
+                "duplicates": 1,
+                "read": 10,
+                "details": [_BACKFILL_DETAIL_PAYLOAD],
+            },
+            "XInboxBackfillCompleted",
+        ),
+    ],
+)
+async def test_async_x_backfill_serialization_and_discriminated_results(
+    monkeypatch: pytest.MonkeyPatch,
+    payload: dict[str, object],
+    type_name: str,
+):
+    requests, _client_options = _install_async_transport(
+        monkeypatch,
+        lambda _request: httpx.Response(200, json=payload),
+    )
+
+    result = await _async_client().inbox.workspace().sync(
+        x_backfill=types.XInboxBackfillRequest(
+            include_replies=False,
+            include_dms=False,
+            confirmation_token="token-exact-value",
+        )
+    )
+
+    assert json.loads(requests[0].content.decode("utf-8")) == {
+        "x_backfill": {
+            "include_replies": False,
+            "include_dms": False,
+            "confirmation_token": "token-exact-value",
+        }
+    }
+    assert isinstance(result, getattr(types, type_name))
+    assert result.details is not None
+    assert isinstance(result.details[0], types.XInboxBackfillAccountResult)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method_name", "arguments", "kwargs"),
+    [
+        ("reply", ("item_1",), {"text": "Thanks"}),
+        ("mark_read", ("item_1",), {}),
+        ("mark_all_read", (), {}),
+        (
+            "update_thread_state",
+            ("item_1",),
+            {"thread_status": "resolved"},
+        ),
+        ("sync", (), {}),
+    ],
+)
+@pytest.mark.parametrize("failure_kind", ["rate_limit", "redirect"])
+async def test_every_async_inbox_write_is_single_attempt_and_no_redirects(
+    monkeypatch: pytest.MonkeyPatch,
+    method_name: str,
+    arguments: tuple[str, ...],
+    kwargs: dict[str, object],
+    failure_kind: str,
+):
+    response = (
+        _async_error_response(429, "RATE_LIMITED")
+        if failure_kind == "rate_limit"
+        else _async_error_response(302, "REDIRECT")
+    )
+    requests, client_options = _install_async_transport(
+        monkeypatch,
+        lambda _request: response,
+    )
+    sleeps: list[object] = []
+
+    async def fake_sleep(delay: object) -> None:
+        sleeps.append(delay)
+
+    monkeypatch.setattr("asyncio.sleep", fake_sleep)
+
+    with pytest.raises(UniPostError):
+        await getattr(_async_client().inbox.workspace(), method_name)(
+            *arguments,
+            **kwargs,
+        )
+
+    assert len(requests) == 1
+    assert client_options == [{"timeout": 5, "follow_redirects": False}]
+    assert sleeps == []
+
+
+@pytest.mark.asyncio
+async def test_non_reply_async_write_uses_ordinary_error_code_precedence(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    requests, _client_options = _install_async_transport(
+        monkeypatch,
+        lambda _request: _async_error_response(
+            409,
+            "RAW_WRITE_CODE",
+            normalized_code="NORMALIZED_WRITE_CODE",
+        ),
+    )
+
+    with pytest.raises(UniPostError) as raised:
+        await _async_client().inbox.workspace().mark_read("item_1")
+
+    assert len(requests) == 1
+    assert raised.value.code == "NORMALIZED_WRITE_CODE"
+
+
+@pytest.mark.parametrize("scheme", ["https", "http"])
+@pytest.mark.parametrize("scope", ["workspace", "managed_user"])
+def test_async_websocket_details_are_synchronous_local_and_immutable(
+    monkeypatch: pytest.MonkeyPatch,
+    scheme: str,
+    scope: str,
+):
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda *_args, **_kwargs: pytest.fail("network request was not expected"),
+    )
+    client = AsyncUniPost(
+        api_key="up_test_websocket_secret",
+        base_url=f"{scheme}://api.example.test/base?ignored=yes#fragment",
+    )
+    scoped = (
+        client.inbox.workspace()
+        if scope == "workspace"
+        else client.inbox.managed_user("user A")
+    )
+
+    first = scoped.websocket_connection_details()
+    second = scoped.websocket_connection_details()
+
+    assert not inspect.isawaitable(first)
+    assert urlsplit(first.url).scheme == ("wss" if scheme == "https" else "ws")
+    assert urlsplit(first.url).path == "/v1/inbox/ws"
+    expected_query = {"inbox_scope": [scope]}
+    if scope == "managed_user":
+        expected_query["external_user_id"] = ["user A"]
+    assert parse_qs(urlsplit(first.url).query) == expected_query
+    assert "up_test_websocket_secret" not in first.url
+    assert dict(first.headers) == {
+        "Authorization": "Bearer up_test_websocket_secret"
+    }
+    assert first is not second
+    assert first.headers is not second.headers
+    with pytest.raises(TypeError):
+        first.headers["Authorization"] = "changed"
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "ftp://api.example.test/up_test_invalid_secret",
+        "api.example.test/up_test_invalid_secret",
+        "https:///up_test_invalid_secret",
+        "https://api.example.test:not-a-port/up_test_invalid_secret",
+        "https://api example.test/up_test_invalid_secret",
+    ],
+)
+def test_async_websocket_invalid_base_fails_with_fixed_safe_error(base_url: str):
+    scoped = AsyncUniPost(
+        api_key="up_test_websocket_secret",
+        base_url=base_url,
+    ).inbox.workspace()
+
+    with pytest.raises(ValueError) as raised:
+        scoped.websocket_connection_details()
+
+    assert str(raised.value) == "Invalid WebSocket base URL."
+    assert "secret" not in repr(raised.value)

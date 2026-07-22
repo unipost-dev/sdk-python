@@ -12,6 +12,7 @@ from urllib.parse import urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, HTTPSHandler, Request, build_opener
 
 from unipost.errors import parse_api_error
+from unipost.types import InboxWebSocketConnectionDetails
 
 DEFAULT_BASE_URL = "https://api.unipost.dev"
 DEFAULT_TIMEOUT = 30
@@ -298,6 +299,19 @@ class HttpClient:
                 raise parsed_error from e
 
         raise last_error or Exception("Request failed after retries")
+
+    def _websocket_connection_details(
+        self,
+        *,
+        query: dict[str, str],
+    ) -> InboxWebSocketConnectionDetails:
+        from unipost.resources.inbox import _build_websocket_connection_details
+
+        return _build_websocket_connection_details(
+            self._base_url,
+            self._api_key,
+            query,
+        )
 
     def get(self, path: str, query: Optional[dict[str, Any]] = None) -> Any:
         return self.request("GET", path, query=query)

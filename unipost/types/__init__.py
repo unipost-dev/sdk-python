@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal, Optional, Union
+from types import MappingProxyType
+from typing import Any, Literal, Mapping, Optional, Union
 
 
 Platform = Literal[
@@ -287,6 +288,153 @@ class InboxReplyReconciling:
 
 
 InboxReplyResult = Union[InboxReplyCompleted, InboxReplyReconciling]
+
+
+@dataclass
+class InboxUnreadCountResult:
+    count: int
+
+
+@dataclass
+class InboxMarkAllReadResult:
+    marked: int
+
+
+@dataclass
+class InboxMediaContext:
+    id: str
+    caption: str
+    media_url: str
+    timestamp: str
+    media_type: str
+    permalink: str
+
+
+@dataclass(frozen=True)
+class XInboxBackfillRequest:
+    include_replies: bool
+    include_dms: bool
+    account_id: Optional[str] = None
+    lookback_days: Optional[int] = None
+    max_items: Optional[int] = None
+    confirmation_token: Optional[str] = None
+
+
+@dataclass
+class InboxSyncError:
+    account_id: str
+    platform: str
+    step: str
+    error: str
+
+
+@dataclass
+class InboxSyncAccountDetail:
+    account_id: str
+    platform: str
+    account_name: str
+    media_found: int
+    comments_found: int
+
+
+@dataclass
+class InboxSyncResult:
+    new_items: int
+    accounts_checked: int
+    errors: list[InboxSyncError]
+    details: list[InboxSyncAccountDetail]
+
+
+@dataclass
+class XInboxBackfillAccountResult:
+    account_id: str
+    accepted: int
+    suppressed: int
+    duplicates: int
+    read: int
+    stopped_at_boundary: Optional[bool] = None
+    stop_reason: Optional[str] = None
+    missing_scopes: Optional[list[str]] = None
+
+
+@dataclass
+class XInboxBackfillInProgress:
+    status: Literal["in_progress"] = field(init=False, default="in_progress")
+    confirmation_operation_id: str
+    execution_lease_expires_at: str
+    estimated_x_credits: Optional[int] = None
+    confirmation_required: Optional[Literal[False]] = None
+    confirmation_token: Optional[str] = None
+    confirmation_expires_at: Optional[str] = None
+    accounts_checked: Optional[int] = None
+    accepted: Optional[int] = None
+    suppressed: Optional[int] = None
+    duplicates: Optional[int] = None
+    read: Optional[int] = None
+    details: Optional[list[XInboxBackfillAccountResult]] = None
+
+
+@dataclass
+class XInboxBackfillConfirmationRequired:
+    confirmation_required: Literal[True] = field(init=False, default=True)
+    confirmation_token: str
+    confirmation_expires_at: str
+    accounts_checked: int
+    estimated_x_credits: Optional[int] = None
+    confirmation_operation_id: Optional[str] = None
+    execution_lease_expires_at: Optional[str] = None
+    accepted: Optional[int] = None
+    suppressed: Optional[int] = None
+    duplicates: Optional[int] = None
+    read: Optional[int] = None
+    details: Optional[list[XInboxBackfillAccountResult]] = None
+
+
+@dataclass
+class XInboxBackfillCompleted:
+    confirmation_required: Literal[False] = field(init=False, default=False)
+    accounts_checked: int
+    accepted: int
+    suppressed: int
+    duplicates: int
+    read: int
+    estimated_x_credits: Optional[int] = None
+    confirmation_operation_id: Optional[str] = None
+    confirmation_token: Optional[str] = None
+    confirmation_expires_at: Optional[str] = None
+    execution_lease_expires_at: Optional[str] = None
+    details: Optional[list[XInboxBackfillAccountResult]] = None
+
+
+XInboxBackfillResult = Union[
+    XInboxBackfillInProgress,
+    XInboxBackfillConfirmationRequired,
+    XInboxBackfillCompleted,
+]
+
+
+@dataclass
+class XInboxOutboundStatus:
+    id: str
+    status: str
+    completion_attempts: int
+    reconciliation_required: bool
+    updated_at: str
+    reconciliation_deadline: Optional[str] = None
+    response_inbox_item_id: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class InboxWebSocketConnectionDetails:
+    url: str
+    headers: Mapping[str, str]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "headers",
+            MappingProxyType(dict(self.headers)),
+        )
 
 
 @dataclass
