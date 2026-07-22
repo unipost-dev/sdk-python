@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import ssl
 import time
+from dataclasses import dataclass
 from typing import Any, Iterator, Optional
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
@@ -16,6 +17,13 @@ DEFAULT_BASE_URL = "https://api.unipost.dev"
 DEFAULT_TIMEOUT = 30
 MAX_RETRIES = 2
 SDK_VERSION = "0.5.0"
+
+
+@dataclass(frozen=True)
+class _HttpResponse:
+    status: int
+    headers: dict[str, str]
+    body: Any
 
 
 def _default_ssl_context() -> ssl.SSLContext:
@@ -50,6 +58,25 @@ class HttpClient:
         query: Optional[dict[str, Any]] = None,
         headers: Optional[dict[str, str]] = None,
     ) -> Any:
+        return self._request_with_response(
+            method,
+            path,
+            body=body,
+            query=query,
+            headers=headers,
+        ).body
+
+    def _request_with_response(
+        self,
+        method: str,
+        path: str,
+        *,
+        body: Any = None,
+        query: Optional[dict[str, Any]] = None,
+        headers: Optional[dict[str, str]] = None,
+        retry_rate_limits: bool = True,
+        preserve_error_code: bool = False,
+    ) -> _HttpResponse:
         url = f"{self._base_url}{path}"
         if query:
             filtered = {k: str(v) for k, v in query.items() if v is not None and v != ""}
@@ -72,20 +99,40 @@ class HttpClient:
                 req = Request(url, data=data, headers=req_headers, method=method)
                 with urlopen(req, timeout=self._timeout, context=self._ssl_ctx) as resp:
                     if resp.status == 204:
-                        return None
-                    raw = resp.read().decode("utf-8")
-                    return json.loads(raw) if raw else None
+                        body_value = None
+                    else:
+                        raw = resp.read().decode("utf-8")
+                        body_value = json.loads(raw) if raw else None
+                    return _HttpResponse(
+                        status=int(resp.status),
+                        headers={
+                            str(key).lower(): str(value)
+                            for key, value in getattr(resp, "headers", {}).items()
+                        },
+                        body=body_value,
+                    )
             except HTTPError as e:
                 try:
                     resp_body = json.loads(e.read().decode("utf-8")) if e.fp else {}
                 except Exception:
                     resp_body = {}
-                if e.code == 429 and attempt < MAX_RETRIES:
+                parsed_error = parse_api_error(e.code, resp_body)
+                if preserve_error_code and isinstance(resp_body, dict):
+                    error_body = resp_body.get("error")
+                    if isinstance(error_body, dict) and isinstance(
+                        error_body.get("code"), str
+                    ):
+                        parsed_error.code = error_body["code"]
+                if (
+                    retry_rate_limits
+                    and e.code == 429
+                    and attempt < MAX_RETRIES
+                ):
                     retry_after = int(e.headers.get("Retry-After", "1"))
                     time.sleep(retry_after)
-                    last_error = parse_api_error(e.code, resp_body)
+                    last_error = parsed_error
                     continue
-                raise parse_api_error(e.code, resp_body) from e
+                raise parsed_error from e
 
         raise last_error or Exception("Request failed after retries")
 

@@ -3,9 +3,28 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from json import JSONDecodeError
 from typing import Any, Literal, Optional
+from urllib.parse import quote
 
-from unipost.types import InboxItem, InboxListResponse, InboxSource, _from_dict
+from unipost.types import (
+    InboxItem,
+    InboxListResponse,
+    InboxReplyCompleted,
+    InboxReplyReconciling,
+    InboxReplyResult,
+    InboxSource,
+    _from_dict,
+)
+
+
+_RECONCILING_CODE = "X_REMOTE_ACCEPTED_RECONCILING"
+
+
+def _encode_item_id(item_id: str) -> str:
+    if item_id in {"", ".", ".."}:
+        raise ValueError("item_id must not be empty, '.' or '..'")
+    return quote(item_id, safe="")
 
 
 @dataclass(frozen=True)
@@ -31,6 +50,12 @@ class _ScopedInbox:
     _scope: Literal["managed_user", "workspace"]
     _external_user_id: Optional[str] = None
 
+    def _scope_query(self) -> dict[str, str]:
+        query: dict[str, str] = {"inbox_scope": self._scope}
+        if self._external_user_id is not None:
+            query["external_user_id"] = self._external_user_id
+        return query
+
     def list(
         self,
         *,
@@ -39,9 +64,7 @@ class _ScopedInbox:
         is_own: Optional[bool] = None,
         limit: Optional[int] = None,
     ) -> InboxListResponse:
-        query: dict[str, Any] = {"inbox_scope": self._scope}
-        if self._external_user_id is not None:
-            query["external_user_id"] = self._external_user_id
+        query: dict[str, Any] = self._scope_query()
         if source is not None:
             query["source"] = source
         if is_read is not None:
@@ -55,4 +78,73 @@ class _ScopedInbox:
         return InboxListResponse(
             data=[_from_dict(InboxItem, item) for item in response.get("data") or []],
             request_id=response.get("request_id"),
+        )
+
+    def reply(
+        self,
+        item_id: str,
+        *,
+        text: str,
+        idempotency_key: Optional[str] = None,
+    ) -> InboxReplyResult:
+        encoded_item_id = _encode_item_id(item_id)
+        headers = (
+            {"Idempotency-Key": idempotency_key}
+            if idempotency_key is not None
+            else None
+        )
+        try:
+            response = self._http._request_with_response(
+                "POST",
+                f"/v1/inbox/{encoded_item_id}/reply",
+                body={"text": text},
+                query=self._scope_query(),
+                headers=headers,
+                retry_rate_limits=False,
+                preserve_error_code=True,
+            )
+        except JSONDecodeError:
+            raise ValueError("Failed to decode Inbox reply response.") from None
+
+        operation_id = response.headers.get("x-unipost-operation-id", "").strip()
+        body = response.body
+
+        if response.status == 200 and isinstance(body, dict):
+            data = body.get("data")
+            if isinstance(data, dict):
+                try:
+                    item = _from_dict(InboxItem, data)
+                except (TypeError, ValueError):
+                    pass
+                else:
+                    return InboxReplyCompleted(
+                        item=item,
+                        operation_id=operation_id or None,
+                    )
+
+        if (
+            response.status == 202
+            and operation_id
+            and isinstance(body, dict)
+            and "data" not in body
+        ):
+            error = body.get("error")
+            request_id = body.get("request_id")
+            request_id_is_valid = (
+                "request_id" not in body or isinstance(request_id, str)
+            )
+            if (
+                isinstance(error, dict)
+                and error.get("code") == _RECONCILING_CODE
+                and isinstance(error.get("message"), str)
+                and request_id_is_valid
+            ):
+                return InboxReplyReconciling(
+                    operation_id=operation_id,
+                    message=error["message"],
+                    request_id=request_id,
+                )
+
+        raise ValueError(
+            f"Failed to decode Inbox reply response with status {response.status}."
         )

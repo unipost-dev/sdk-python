@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Optional, Union
 
 
 Platform = Literal[
@@ -265,6 +265,28 @@ class InboxItem:
 class InboxListResponse:
     data: list[InboxItem]
     request_id: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class InboxReplyCompleted:
+    state: Literal["completed"] = field(init=False, default="completed")
+    item: InboxItem
+    operation_id: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class InboxReplyReconciling:
+    state: Literal["reconciling"] = field(init=False, default="reconciling")
+    operation_id: str
+    code: Literal["X_REMOTE_ACCEPTED_RECONCILING"] = field(
+        init=False,
+        default="X_REMOTE_ACCEPTED_RECONCILING",
+    )
+    message: str
+    request_id: Optional[str] = None
+
+
+InboxReplyResult = Union[InboxReplyCompleted, InboxReplyReconciling]
 
 
 @dataclass
