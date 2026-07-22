@@ -3,6 +3,7 @@ from __future__ import annotations
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
 import json
+import inspect
 from socketserver import TCPServer
 from threading import Thread
 from urllib.parse import parse_qs, urlsplit
@@ -10,14 +11,22 @@ from urllib.error import HTTPError
 from urllib.request import Request
 
 import pytest
+import httpx
 
-from unipost import InboxItem, InboxListResponse, UniPost
+from unipost import AsyncUniPost, InboxItem, InboxListResponse, UniPost
 from unipost.errors import RateLimitError, UniPostError
 from unipost.http import HttpClient
 from unipost.resources.inbox import Inbox
 import unipost.http as http_module
 import unipost.resources.inbox as inbox_resource
 import unipost.types as types
+
+
+@pytest.mark.asyncio
+async def test_async_client_exposes_inbox_resource():
+    client = AsyncUniPost(api_key="up_test_inbox")
+
+    assert client.inbox is not None
 
 
 class FakeHTTP:
@@ -996,3 +1005,617 @@ def test_ordinary_request_still_retries_429(monkeypatch: pytest.MonkeyPatch):
     assert result == {"data": "ok"}
     assert len(requests) == 2
     assert sleeps == [0]
+
+
+def _install_async_transport(
+    monkeypatch: pytest.MonkeyPatch,
+    handler,
+):
+    requests: list[httpx.Request] = []
+    client_options: list[dict[str, object]] = []
+    real_async_client = httpx.AsyncClient
+
+    async def dispatch(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return handler(request)
+
+    transport = httpx.MockTransport(dispatch)
+
+    def async_client_factory(*args, **kwargs):
+        client_options.append(dict(kwargs))
+        kwargs["transport"] = transport
+        return real_async_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", async_client_factory)
+    return requests, client_options
+
+
+def _async_client() -> AsyncUniPost:
+    return AsyncUniPost(
+        api_key="up_test_inbox_secret",
+        base_url="https://api.example.test",
+        timeout=5,
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_managed_user_list_matches_sync_contract(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    payload = {**_reply_item_payload(), "unknown_item_field": "ignored"}
+    requests, client_options = _install_async_transport(
+        monkeypatch,
+        lambda _request: httpx.Response(
+            200,
+            json={
+                "data": [payload],
+                "request_id": "req_async_list",
+                "next_cursor": "must_be_ignored",
+            },
+        ),
+    )
+
+    scoped = _async_client().inbox.managed_user("user A")
+    result = await scoped.list(
+        source="ig_comment",
+        is_read=False,
+        is_own=False,
+        limit=25,
+    )
+
+    assert len(requests) == 1
+    request = requests[0]
+    assert request.method == "GET"
+    assert request.url.path == "/v1/inbox"
+    assert "user A" not in str(request.url)
+    assert parse_qs(request.url.query.decode("ascii")) == {
+        "inbox_scope": ["managed_user"],
+        "external_user_id": ["user A"],
+        "source": ["ig_comment"],
+        "is_read": ["false"],
+        "is_own": ["false"],
+        "limit": ["25"],
+    }
+    assert client_options == [{"timeout": 5, "follow_redirects": False}]
+    assert result == InboxListResponse(
+        data=[InboxItem(**_reply_item_payload())],
+        request_id="req_async_list",
+    )
+    assert not hasattr(result, "next_cursor")
+
+
+@pytest.mark.asyncio
+async def test_async_workspace_list_sends_only_workspace_scope(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    requests, _client_options = _install_async_transport(
+        monkeypatch,
+        lambda _request: httpx.Response(
+            200,
+            json={"data": [], "request_id": "req_workspace"},
+        ),
+    )
+
+    result = await _async_client().inbox.workspace().list()
+
+    assert len(requests) == 1
+    assert parse_qs(requests[0].url.query.decode("ascii")) == {
+        "inbox_scope": ["workspace"]
+    }
+    assert result == InboxListResponse(data=[], request_id="req_workspace")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("external_user_id", ["", " ", "\t\n"])
+async def test_async_managed_user_rejects_blank_ids_before_request(
+    monkeypatch: pytest.MonkeyPatch,
+    external_user_id: str,
+):
+    requests, _client_options = _install_async_transport(
+        monkeypatch,
+        lambda _request: pytest.fail("network request was not expected"),
+    )
+
+    with pytest.raises(ValueError, match="external_user_id"):
+        _async_client().inbox.managed_user(external_user_id)
+
+    assert requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("scope_factory", "unexpected"),
+    [
+        (lambda inbox: inbox.managed_user("user_1"), {"inbox_scope": "workspace"}),
+        (lambda inbox: inbox.managed_user("user_1"), {"external_user_id": "user_2"}),
+        (lambda inbox: inbox.workspace(), {"cursor": "cursor_1"}),
+    ],
+)
+async def test_async_list_rejects_scope_and_cursor_keywords_before_request(
+    monkeypatch: pytest.MonkeyPatch,
+    scope_factory,
+    unexpected: dict[str, str],
+):
+    requests, _client_options = _install_async_transport(
+        monkeypatch,
+        lambda _request: pytest.fail("network request was not expected"),
+    )
+    scoped = scope_factory(_async_client().inbox)
+
+    with pytest.raises(TypeError):
+        await scoped.list(**unexpected)
+
+    assert requests == []
+
+
+@pytest.mark.asyncio
+async def test_async_scoped_resources_are_immutable_and_match_sync_signatures():
+    inbox = _async_client().inbox
+    scoped = inbox.managed_user("user_1")
+    sync_scoped = Inbox(FakeHTTP()).managed_user("user_1")
+
+    assert not hasattr(scoped, "scope")
+    with pytest.raises(AttributeError):
+        setattr(scoped, "_scope", "workspace")
+    with pytest.raises(AttributeError):
+        setattr(scoped, "_external_user_id", "user_2")
+    assert inspect.signature(scoped.list) == inspect.signature(sync_scoped.list)
+
+
+@pytest.mark.asyncio
+async def test_async_reply_200_matches_exact_sync_request_and_result(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    requests, client_options = _install_async_transport(
+        monkeypatch,
+        lambda _request: httpx.Response(
+            200,
+            headers={"X-UniPost-Operation-Id": " op_completed "},
+            json={"data": _reply_item_payload(), "request_id": "ignored"},
+        ),
+    )
+    scoped = _async_client().inbox.managed_user("user A")
+
+    result = await scoped.reply(
+        "item /?#",
+        text="Thanks",
+        idempotency_key="idem-exact-value",
+    )
+
+    assert len(requests) == 1
+    request = requests[0]
+    assert request.method == "POST"
+    assert request.url.path == "/v1/inbox/item /?#/reply"
+    assert request.url.raw_path.split(b"?")[0] == b"/v1/inbox/item%20%2F%3F%23/reply"
+    assert parse_qs(request.url.query.decode("ascii")) == {
+        "inbox_scope": ["managed_user"],
+        "external_user_id": ["user A"],
+    }
+    assert json.loads(request.content.decode("utf-8")) == {"text": "Thanks"}
+    assert request.headers["idempotency-key"] == "idem-exact-value"
+    assert client_options == [{"timeout": 5, "follow_redirects": False}]
+    assert result == types.InboxReplyCompleted(
+        item=InboxItem(**_reply_item_payload()),
+        operation_id="op_completed",
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_reply_200_omits_optional_headers_and_operation(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    requests, _client_options = _install_async_transport(
+        monkeypatch,
+        lambda _request: httpx.Response(
+            200,
+            headers={"X-UniPost-Operation-Id": "  "},
+            json={"data": _reply_item_payload()},
+        ),
+    )
+
+    result = await _async_client().inbox.workspace().reply("item_1", text="Thanks")
+
+    assert len(requests) == 1
+    assert "idempotency-key" not in requests[0].headers
+    assert result.operation_id is None
+
+
+@pytest.mark.asyncio
+async def test_async_reply_202_returns_exact_reconciling_result(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    requests, _client_options = _install_async_transport(
+        monkeypatch,
+        lambda _request: httpx.Response(
+            202,
+            headers={"x-UNIPOST-operation-ID": " op_reconcile "},
+            json={
+                "error": {
+                    "code": "X_REMOTE_ACCEPTED_RECONCILING",
+                    "message": "Accepted remotely; reconciling",
+                },
+                "request_id": "req_202",
+            },
+        ),
+    )
+
+    result = await _async_client().inbox.workspace().reply("item_1", text="Thanks")
+
+    assert len(requests) == 1
+    assert result == types.InboxReplyReconciling(
+        operation_id="op_reconcile",
+        message="Accepted remotely; reconciling",
+        request_id="req_202",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("item_id", ["", ".", ".."])
+async def test_async_reply_rejects_invalid_item_ids_before_request(
+    monkeypatch: pytest.MonkeyPatch,
+    item_id: str,
+):
+    requests, _client_options = _install_async_transport(
+        monkeypatch,
+        lambda _request: pytest.fail("network request was not expected"),
+    )
+
+    with pytest.raises(ValueError, match="item_id"):
+        await _async_client().inbox.workspace().reply(item_id, text="Thanks")
+
+    assert requests == []
+
+
+@pytest.mark.asyncio
+async def test_async_reply_text_is_required_keyword_only(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    requests, _client_options = _install_async_transport(
+        monkeypatch,
+        lambda _request: pytest.fail("network request was not expected"),
+    )
+    scoped = _async_client().inbox.workspace()
+
+    with pytest.raises(TypeError):
+        await scoped.reply("item_1", "Thanks")
+    with pytest.raises(TypeError):
+        await scoped.reply("item_1")
+
+    assert requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "idempotency_key",
+    [
+        "up_test_idem_secret\r\nX-Evil: injected",
+        "up_test_idem_secret\x00",
+        "up_test_idem_secret\x7f",
+        "up_test_idem_secret\x85",
+        "up_test_idem_secret🔐",
+    ],
+)
+async def test_async_reply_rejects_unsafe_idempotency_keys_before_request(
+    monkeypatch: pytest.MonkeyPatch,
+    idempotency_key: str,
+):
+    requests, _client_options = _install_async_transport(
+        monkeypatch,
+        lambda _request: pytest.fail("network request was not expected"),
+    )
+
+    with pytest.raises(ValueError) as raised:
+        await _async_client().inbox.workspace().reply(
+            "item_1",
+            text="Thanks",
+            idempotency_key=idempotency_key,
+        )
+
+    assert requests == []
+    assert str(raised.value) == "Invalid idempotency_key."
+    assert "up_test_idem_secret" not in repr(raised.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("case", "status", "body", "headers"),
+    [
+        ("202 missing operation header", 202, {
+            "error": {
+                "code": "X_REMOTE_ACCEPTED_RECONCILING",
+                "message": "Accepted",
+            }
+        }, {}),
+        ("202 blank operation header", 202, {
+            "error": {
+                "code": "X_REMOTE_ACCEPTED_RECONCILING",
+                "message": "Accepted",
+            }
+        }, {"X-UniPost-Operation-Id": "  "}),
+        ("202 wrong code", 202, {
+            "error": {"code": "WRONG_CODE", "message": "Accepted"}
+        }, {"X-UniPost-Operation-Id": "op_1"}),
+        ("202 missing code", 202, {
+            "error": {"message": "Accepted"}
+        }, {"X-UniPost-Operation-Id": "op_1"}),
+        ("202 missing error object", 202, {}, {
+            "X-UniPost-Operation-Id": "op_1"
+        }),
+        ("202 missing message", 202, {
+            "error": {"code": "X_REMOTE_ACCEPTED_RECONCILING"}
+        }, {"X-UniPost-Operation-Id": "op_1"}),
+        ("202 unexpected data envelope", 202, {
+            "data": _reply_item_payload(),
+            "error": {
+                "code": "X_REMOTE_ACCEPTED_RECONCILING",
+                "message": "Accepted",
+            },
+        }, {"X-UniPost-Operation-Id": "op_1"}),
+        ("200 missing data", 200, {}, {}),
+        ("201 with data", 201, {"data": _reply_item_payload()}, {}),
+        ("204 empty", 204, None, {}),
+    ],
+    ids=lambda value: value if isinstance(value, str) and value[0].isdigit() else None,
+)
+async def test_async_reply_malformed_success_fails_closed_after_one_request(
+    monkeypatch: pytest.MonkeyPatch,
+    case: str,
+    status: int,
+    body: object,
+    headers: dict[str, str],
+):
+    def handler(_request: httpx.Request) -> httpx.Response:
+        if body is None:
+            return httpx.Response(status, headers=headers)
+        return httpx.Response(status, headers=headers, json=body)
+
+    requests, _client_options = _install_async_transport(monkeypatch, handler)
+
+    with pytest.raises(
+        ValueError,
+        match=rf"^Failed to decode Inbox reply response with status {status}\.$",
+    ):
+        await _async_client().inbox.workspace().reply("item_1", text="Thanks")
+
+    assert requests, case
+    assert len(requests) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "content",
+    [
+        b'{"api_key":"up_test_inbox_secret"',
+        b"up_test_inbox_secret_adjacent\xff",
+    ],
+)
+async def test_async_reply_malformed_encoding_fails_closed_without_secrets(
+    monkeypatch: pytest.MonkeyPatch,
+    content: bytes,
+):
+    requests, _client_options = _install_async_transport(
+        monkeypatch,
+        lambda _request: httpx.Response(
+            202,
+            headers={"X-UniPost-Operation-Id": "op_1"},
+            content=content,
+        ),
+    )
+
+    with pytest.raises(ValueError) as raised:
+        await _async_client().inbox.workspace().reply(
+            "item_1",
+            text="Thanks",
+            idempotency_key="idem-secret-value",
+        )
+
+    assert len(requests) == 1
+    assert str(raised.value) == "Failed to decode Inbox reply response."
+    representation = repr(raised.value)
+    assert "up_test_inbox_secret" not in representation
+    assert "idem-secret-value" not in representation
+
+
+@pytest.mark.asyncio
+async def test_async_reply_signature_matches_sync():
+    scoped = _async_client().inbox.workspace()
+    sync_scoped = Inbox(FakeHTTP()).workspace()
+
+    assert inspect.signature(scoped.reply) == inspect.signature(sync_scoped.reply)
+
+
+def _async_error_response(
+    status: int,
+    code: str,
+    *,
+    normalized_code: str = "NORMALIZED",
+    retry_after: object = 0,
+    retry_after_header: str = "0",
+) -> httpx.Response:
+    body = {
+        "error": {
+            "code": code,
+            "normalized_code": normalized_code,
+            "message": "Reply failed",
+            "retry_after": retry_after,
+        }
+    }
+    return httpx.Response(
+        status,
+        headers={
+            "Content-Type": "application/json",
+            "Retry-After": retry_after_header,
+        },
+        content=json.dumps(body).encode("utf-8"),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "code"),
+    [
+        (400, "VALIDATION_ERROR"),
+        (402, "X_MONTHLY_USAGE_LIMIT_EXCEEDED"),
+        (409, "X_RECONNECT_REQUIRED"),
+        (409, "NEEDS_RECONNECT"),
+        (409, "IDEMPOTENCY_KEY_CONFLICT"),
+        (409, "X_WRITE_OUTCOME_PENDING"),
+        (409, "X_WRITE_NEEDS_RECONCILIATION"),
+        (409, "X_USAGE_REVERSAL_PENDING"),
+        (422, "VALIDATION_ERROR"),
+        (422, "PLATFORM_ERROR"),
+    ],
+)
+async def test_async_reply_non_2xx_preserves_raw_code_after_one_request(
+    monkeypatch: pytest.MonkeyPatch,
+    status: int,
+    code: str,
+):
+    requests, _client_options = _install_async_transport(
+        monkeypatch,
+        lambda _request: _async_error_response(
+            status,
+            code,
+            normalized_code="NORMALIZED_DIFFERENT",
+        ),
+    )
+
+    with pytest.raises(UniPostError) as raised:
+        await _async_client().inbox.workspace().reply("item_1", text="Thanks")
+
+    assert len(requests) == 1
+    assert raised.value.status == status
+    assert raised.value.code == code
+
+
+@pytest.mark.asyncio
+async def test_async_ordinary_request_keeps_normalized_code_precedence(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    requests, _client_options = _install_async_transport(
+        monkeypatch,
+        lambda _request: _async_error_response(
+            409,
+            "RAW_CODE",
+            normalized_code="NORMALIZED_CODE",
+        ),
+    )
+    http = _async_client().inbox._http
+
+    with pytest.raises(UniPostError) as raised:
+        await http.request("POST", "/ordinary")
+
+    assert len(requests) == 1
+    assert raised.value.code == "NORMALIZED_CODE"
+
+
+@pytest.mark.asyncio
+async def test_async_ordinary_request_still_returns_body_only(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    requests, _client_options = _install_async_transport(
+        monkeypatch,
+        lambda _request: httpx.Response(200, json={"data": "ok"}),
+    )
+
+    result = await _async_client().inbox._http.request("GET", "/ordinary")
+
+    assert len(requests) == 1
+    assert result == {"data": "ok"}
+
+
+@pytest.mark.asyncio
+async def test_async_reply_429_is_not_slept_or_replayed(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    requests, _client_options = _install_async_transport(
+        monkeypatch,
+        lambda _request: _async_error_response(
+            429,
+            "RATE_LIMITED",
+            retry_after_header="up_test_retry_header_secret",
+        ),
+    )
+    sleeps: list[object] = []
+
+    async def fake_sleep(delay: object) -> None:
+        sleeps.append(delay)
+
+    monkeypatch.setattr("asyncio.sleep", fake_sleep)
+
+    with pytest.raises(RateLimitError):
+        await _async_client().inbox.workspace().reply("item_1", text="Thanks")
+
+    assert len(requests) == 1
+    assert sleeps == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("retry_after", "expected_retry_after"),
+    [
+        ("up_test_retry_secret", 1),
+        (["up_test_retry_secret"], 1),
+        ({"marker": "up_test_retry_secret"}, 1),
+        (10**9, 60),
+        (float("inf"), 1),
+        ("NaN", 1),
+        (True, 1),
+    ],
+)
+async def test_async_reply_429_sanitizes_malformed_retry_after_body(
+    monkeypatch: pytest.MonkeyPatch,
+    retry_after: object,
+    expected_retry_after: int,
+):
+    requests, _client_options = _install_async_transport(
+        monkeypatch,
+        lambda _request: _async_error_response(
+            429,
+            "RATE_LIMITED",
+            retry_after=retry_after,
+        ),
+    )
+    sleeps: list[object] = []
+
+    async def fake_sleep(delay: object) -> None:
+        sleeps.append(delay)
+
+    monkeypatch.setattr("asyncio.sleep", fake_sleep)
+
+    with pytest.raises(RateLimitError) as raised:
+        await _async_client().inbox.workspace().reply("item_1", text="Thanks")
+
+    assert len(requests) == 1
+    assert sleeps == []
+    assert raised.value.status == 429
+    assert raised.value.retry_after == expected_retry_after
+    assert "up_test_retry_secret" not in repr(raised.value)
+
+
+@pytest.mark.asyncio
+async def test_async_reply_does_not_follow_redirect_or_make_second_request(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/capture":
+            return httpx.Response(200, json={"data": _reply_item_payload()})
+        return httpx.Response(
+            302,
+            headers={"Location": "https://redirect.example.test/capture"},
+            json={"error": {"code": "REDIRECT", "message": "Redirect denied"}},
+        )
+
+    requests, _client_options = _install_async_transport(monkeypatch, handler)
+
+    with pytest.raises(UniPostError) as raised:
+        await _async_client().inbox.workspace().reply(
+            "item_1",
+            text="Thanks",
+            idempotency_key="idem-redirect-test",
+        )
+
+    assert raised.value.status == 302
+    assert [request.url.path for request in requests] == [
+        "/v1/inbox/item_1/reply"
+    ]

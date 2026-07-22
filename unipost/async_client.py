@@ -1,15 +1,25 @@
 """Asynchronous UniPost client (requires httpx)."""
 
 from __future__ import annotations
+from dataclasses import dataclass
+import json
 import os
-from typing import Any, Optional, Union
+from typing import Any, Literal, Optional, Union
 
 from unipost.errors import parse_api_error
+from unipost.types import InboxListResponse, InboxReplyResult, InboxSource
 
 DEFAULT_BASE_URL = "https://api.unipost.dev"
 DEFAULT_TIMEOUT = 30
 MAX_RETRIES = 2
 SDK_VERSION = "0.5.0"
+
+
+@dataclass(frozen=True)
+class _AsyncHttpResponse:
+    status: int
+    headers: dict[str, str]
+    body: Any
 
 
 class AsyncHttpClient:
@@ -29,8 +39,31 @@ class AsyncHttpClient:
         query: Optional[dict[str, Any]] = None,
         headers: Optional[dict[str, str]] = None,
     ) -> Any:
+        return (
+            await self._request_with_response(
+                method,
+                path,
+                body=body,
+                query=query,
+                headers=headers,
+            )
+        ).body
+
+    async def _request_with_response(
+        self,
+        method: str,
+        path: str,
+        *,
+        body: Any = None,
+        query: Optional[dict[str, Any]] = None,
+        headers: Optional[dict[str, str]] = None,
+        retry_rate_limits: bool = True,
+        preserve_error_code: bool = False,
+        follow_redirects: bool = False,
+    ) -> _AsyncHttpResponse:
         import httpx
         import asyncio
+        from unipost.http import _coerce_retry_after, _sanitize_rate_limit_body
 
         url = f"{self._base_url}{path}"
         req_headers = {
@@ -45,7 +78,10 @@ class AsyncHttpClient:
 
         last_error: Optional[Exception] = None
         for attempt in range(MAX_RETRIES + 1):
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
+            async with httpx.AsyncClient(
+                timeout=self._timeout,
+                follow_redirects=follow_redirects,
+            ) as client:
                 resp = await client.request(
                     method,
                     url,
@@ -55,14 +91,43 @@ class AsyncHttpClient:
                 )
                 if resp.is_success:
                     if resp.status_code == 204:
-                        return None
-                    return resp.json()
-                if resp.status_code == 429 and attempt < MAX_RETRIES:
-                    retry_after = int(resp.headers.get("Retry-After", "1"))
+                        body_value = None
+                    else:
+                        body_value = (
+                            json.loads(resp.content.decode("utf-8"))
+                            if resp.content
+                            else None
+                        )
+                    return _AsyncHttpResponse(
+                        status=resp.status_code,
+                        headers={
+                            str(key).lower(): str(value)
+                            for key, value in resp.headers.items()
+                        },
+                        body=body_value,
+                    )
+                error_body = _safe_json(resp)
+                if resp.status_code == 429:
+                    error_body = _sanitize_rate_limit_body(error_body)
+                parsed_error = parse_api_error(resp.status_code, error_body)
+                if preserve_error_code and isinstance(error_body, dict):
+                    raw_error = error_body.get("error")
+                    if isinstance(raw_error, dict) and isinstance(
+                        raw_error.get("code"), str
+                    ):
+                        parsed_error.code = raw_error["code"]
+                if (
+                    retry_rate_limits
+                    and resp.status_code == 429
+                    and attempt < MAX_RETRIES
+                ):
+                    retry_after = _coerce_retry_after(
+                        resp.headers.get("Retry-After", "1")
+                    )
                     await asyncio.sleep(retry_after)
-                    last_error = parse_api_error(resp.status_code, _safe_json(resp))
+                    last_error = parsed_error
                     continue
-                raise parse_api_error(resp.status_code, _safe_json(resp))
+                raise parsed_error
 
         raise last_error or Exception("Request failed after retries")
 
@@ -340,6 +405,103 @@ class _AsyncLogs:
             yield json.loads("\n".join(data_lines))
 
 
+@dataclass(frozen=True)
+class _AsyncInbox:
+    _http: AsyncHttpClient
+
+    def managed_user(self, external_user_id: str) -> _AsyncScopedInbox:
+        if not external_user_id.strip():
+            raise ValueError("external_user_id must not be blank")
+        return _AsyncScopedInbox(
+            self._http,
+            _scope="managed_user",
+            _external_user_id=external_user_id,
+        )
+
+    def workspace(self) -> _AsyncScopedInbox:
+        return _AsyncScopedInbox(self._http, _scope="workspace")
+
+
+@dataclass(frozen=True)
+class _AsyncScopedInbox:
+    _http: AsyncHttpClient
+    _scope: Literal["managed_user", "workspace"]
+    _external_user_id: Optional[str] = None
+
+    def _scope_query(self) -> dict[str, str]:
+        query: dict[str, str] = {"inbox_scope": self._scope}
+        if self._external_user_id is not None:
+            query["external_user_id"] = self._external_user_id
+        return query
+
+    async def list(
+        self,
+        *,
+        source: Optional[InboxSource] = None,
+        is_read: Optional[bool] = None,
+        is_own: Optional[bool] = None,
+        limit: Optional[int] = None,
+    ) -> InboxListResponse:
+        from unipost.types import InboxItem, _from_dict
+
+        query: dict[str, Any] = self._scope_query()
+        if source is not None:
+            query["source"] = source
+        if is_read is not None:
+            query["is_read"] = str(is_read).lower()
+        if is_own is not None:
+            query["is_own"] = str(is_own).lower()
+        if limit is not None:
+            query["limit"] = limit
+
+        response = await self._http.get("/v1/inbox", query=query)
+        return InboxListResponse(
+            data=[_from_dict(InboxItem, item) for item in response.get("data") or []],
+            request_id=response.get("request_id"),
+        )
+
+    async def reply(
+        self,
+        item_id: str,
+        *,
+        text: str,
+        idempotency_key: Optional[str] = None,
+    ) -> InboxReplyResult:
+        from unipost.resources.inbox import (
+            _decode_reply_response,
+            _encode_item_id,
+            _validate_idempotency_key,
+        )
+
+        encoded_item_id = _encode_item_id(item_id)
+        if idempotency_key is not None:
+            _validate_idempotency_key(idempotency_key)
+        headers = (
+            {"Idempotency-Key": idempotency_key}
+            if idempotency_key is not None
+            else None
+        )
+        try:
+            response = await self._http._request_with_response(
+                "POST",
+                f"/v1/inbox/{encoded_item_id}/reply",
+                body={"text": text},
+                query=self._scope_query(),
+                headers=headers,
+                retry_rate_limits=False,
+                preserve_error_code=True,
+                follow_redirects=False,
+            )
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            raise ValueError("Failed to decode Inbox reply response.") from None
+
+        return _decode_reply_response(
+            response.status,
+            response.headers,
+            response.body,
+        )
+
+
 class AsyncUniPost:
     """
     Official UniPost API client (asynchronous, requires httpx).
@@ -381,3 +543,4 @@ class AsyncUniPost:
         self.media = _AsyncMedia(http)
         self.api_keys = _AsyncApiKeys(http)
         self.logs = _AsyncLogs(http)
+        self.inbox = _AsyncInbox(http)
