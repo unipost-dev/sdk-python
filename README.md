@@ -284,7 +284,14 @@ if estimate.confirmation_required:
             confirmation_token=estimate.confirmation_token,
         )
     )
-    print(confirmed)
+    print(
+        {
+            "accepted": confirmed.accepted,
+            "suppressed": confirmed.suppressed,
+            "duplicates": confirmed.duplicates,
+            "read": confirmed.read,
+        }
+    )
 ```
 
 The async client exposes the same scopes and contract. Await network operations; `websocket_connection_details()` remains synchronous because it only prepares immutable connection details.
