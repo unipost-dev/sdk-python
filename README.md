@@ -196,7 +196,7 @@ print(session.url)
 
 ### Inbox (server-side apps)
 
-Keep the workspace API key on your application backend. Never expose it to managed users, browser code, or a mobile app. Derive the external user ID from your authenticated application session—not an arbitrary scope value supplied by the caller—and bind every managed-user operation with `client.inbox.managed_user(id)`. Managed-user scope never falls back to workspace scope. Reserve `client.inbox.workspace()` for authenticated app owners and admins who are allowed to use an aggregate Inbox.
+Keep the workspace API key on your application backend. Never expose it to managed users, browser code, or a mobile app. Derive the external user ID from your authenticated application session—not an arbitrary scope value supplied by the caller—and bind every managed-user operation with `client.inbox.managed_user(id)`. Managed-user scope never falls back to workspace scope. `client.inbox.workspace()` is allowed only while the creator of that workspace API key remains a UniPost workspace owner or admin. This UniPost role check is separate from your end application's authenticated user: an authenticated managed user in your app must never receive workspace-wide access.
 
 Create the scoped resources on your backend:
 
@@ -212,7 +212,7 @@ def inbox_scopes(workspace_api_key: str, authenticated_external_user_id: str):
     }
 ```
 
-The selected scope is carried by every Inbox request. Listing accepts `source`, `is_read`, `is_own`, and `limit`; explicit `False` values are preserved. It is limit-only and returns one non-paginated page. The server default is 50 items and the server clamps the limit to 500.
+The selected scope is carried by every Inbox request. Listing accepts `source`, `is_read`, `is_own`, and `limit`; explicit `False` values are preserved. It is limit-only and returns one non-paginated page. An omitted, invalid, zero, or negative limit falls back to 50 items; a limit above 500 is clamped to 500.
 
 ```python
 inbox = inbox_scopes(workspace_api_key, authenticated_external_user_id)["managed"]
@@ -233,7 +233,7 @@ if page.data:
 marked = inbox.mark_all_read()
 ```
 
-Replies are response-aware. A `completed` result contains the reply item. A `reconciling` result means X accepted the reply while UniPost is still reconciling it. Generate one stable idempotency key per logical X reply, reuse that same key for transport retries, and poll `x_outbound_status(...)` when reconciliation is required. Never resend a reconciling reply under a new key.
+Replies are response-aware: HTTP `200` maps to a `completed` result containing the reply item, while a valid HTTP `202` maps to `reconciling`, meaning X accepted the reply while UniPost is still reconciling it. Generate one stable idempotency key per logical X reply, reuse that same key for transport retries, and poll `x_outbound_status(...)` when reconciliation is required. Never resend a reconciling reply under a new key.
 
 ```python
 item_id = "inbox_item_from_scoped_list"
@@ -290,7 +290,7 @@ if estimate.confirmation_required:
 The async client exposes the same scopes and contract. Await network operations; `websocket_connection_details()` remains synchronous because it only prepares immutable connection details.
 
 ```python
-from unipost import AsyncUniPost
+from unipost import AsyncUniPost, InboxSyncResult
 
 
 async def handle_inbox(workspace_api_key: str, external_user_id: str) -> None:
@@ -302,6 +302,7 @@ async def handle_inbox(workspace_api_key: str, external_user_id: str) -> None:
     if page.data:
         await inbox.mark_read(page.data[0].id)
     ordinary = await inbox.sync()
+    assert isinstance(ordinary, InboxSyncResult)
     details = inbox.websocket_connection_details()
     print(unread.count, ordinary.new_items, details.url)
 ```
