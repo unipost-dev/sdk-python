@@ -41,12 +41,29 @@ from unipost.types import (
     InboxThreadStatus,
     InboxItem,
     InboxListResponse,
+    InboxReplyCompleted,
+    InboxReplyReconciling,
+    InboxReplyResult,
+    InboxUnreadCountResult,
+    InboxMarkAllReadResult,
+    InboxMediaContext,
+    XInboxBackfillRequest,
+    InboxSyncError,
+    InboxSyncAccountDetail,
+    InboxSyncResult,
+    XInboxBackfillAccountResult,
+    XInboxBackfillInProgress,
+    XInboxBackfillConfirmationRequired,
+    XInboxBackfillCompleted,
+    XInboxBackfillResult,
+    XInboxOutboundStatus,
+    InboxWebSocketConnectionDetails,
 )
 from unipost.resources.profiles import Profiles
 from unipost.resources.api_keys import ApiKeys
 from unipost.resources.logs import Logs
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 __all__ = [
     "UniPost",
     "AsyncUniPost",
@@ -89,4 +106,21 @@ __all__ = [
     "InboxThreadStatus",
     "InboxItem",
     "InboxListResponse",
+    "InboxReplyCompleted",
+    "InboxReplyReconciling",
+    "InboxReplyResult",
+    "InboxUnreadCountResult",
+    "InboxMarkAllReadResult",
+    "InboxMediaContext",
+    "XInboxBackfillRequest",
+    "InboxSyncError",
+    "InboxSyncAccountDetail",
+    "InboxSyncResult",
+    "XInboxBackfillAccountResult",
+    "XInboxBackfillInProgress",
+    "XInboxBackfillConfirmationRequired",
+    "XInboxBackfillCompleted",
+    "XInboxBackfillResult",
+    "XInboxOutboundStatus",
+    "InboxWebSocketConnectionDetails",
 ]

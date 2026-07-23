@@ -17,7 +17,7 @@ from unipost.types import InboxWebSocketConnectionDetails
 DEFAULT_BASE_URL = "https://api.unipost.dev"
 DEFAULT_TIMEOUT = 30
 MAX_RETRIES = 2
-SDK_VERSION = "0.5.0"
+SDK_VERSION = "0.6.0"
 _MAX_RETRY_AFTER_SECONDS = 60
 _SENSITIVE_REDIRECT_HEADERS = {"authorization", "idempotency-key"}
 _DEFAULT_PORTS = {"http": 80, "https": 443, "ftp": 21}

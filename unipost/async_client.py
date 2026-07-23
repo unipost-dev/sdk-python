@@ -44,7 +44,7 @@ from unipost.types import (
 DEFAULT_BASE_URL = "https://api.unipost.dev"
 DEFAULT_TIMEOUT = 30
 MAX_RETRIES = 2
-SDK_VERSION = "0.5.0"
+SDK_VERSION = "0.6.0"
 
 
 @dataclass(frozen=True)
