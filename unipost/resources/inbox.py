@@ -445,7 +445,7 @@ class _ScopedInbox:
         x_backfill: Optional[XInboxBackfillRequest] = None,
     ) -> Union[InboxSyncResult, XInboxBackfillResult]:
         body = (
-            {}
+            None
             if x_backfill is None
             else {"x_backfill": _serialize_x_backfill_request(x_backfill)}
         )

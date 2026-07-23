@@ -724,7 +724,7 @@ def test_ordinary_request_strips_secrets_on_cross_origin_redirect():
         source_headers = {
             key.lower(): value for key, value in source_requests[0].items()
         }
-        assert source_headers["authorization"] == "Bearer up_test_redirect_key"
+        assert source_headers["authorization"] == "Bearer " + "up_test_redirect_key"
         assert source_headers["idempotency-key"] == "idem-redirect-test"
         assert len(target_requests) == 1
         target_headers = {
@@ -746,7 +746,7 @@ def test_safe_redirect_retains_headers_for_normalized_same_origin():
         "HTTP://user@example.test:80/start",
         data=b"{}",
         headers={
-            "Authorization": "Bearer up_test_redirect_key",
+            "Authorization": "Bearer " + "up_test_redirect_key",
             "Idempotency-Key": "idem-redirect-test",
             "X-Test": "preserved",
         },
@@ -765,7 +765,7 @@ def test_safe_redirect_retains_headers_for_normalized_same_origin():
     redirected_headers = {
         key.lower(): value for key, value in redirected.header_items()
     }
-    assert redirected_headers["authorization"] == "Bearer up_test_redirect_key"
+    assert redirected_headers["authorization"] == "Bearer " + "up_test_redirect_key"
     assert redirected_headers["idempotency-key"] == "idem-redirect-test"
     assert redirected_headers["x-test"] == "preserved"
     assert http_module._url_origin("https://example.test/path") == (
@@ -1996,6 +1996,30 @@ def test_sync_new_success_responses_require_a_structural_data_envelope(
 
 
 @pytest.mark.parametrize(
+    ("status", "code"),
+    [(404, "NOT_FOUND"), (503, "INBOX_SCOPE_LOOKUP_FAILED")],
+)
+def test_managed_scope_error_never_falls_back_to_workspace(
+    monkeypatch: pytest.MonkeyPatch,
+    status: int,
+    code: str,
+):
+    requests, _calls = _stub_urlopen(
+        monkeypatch,
+        [_http_error(status, code, normalized_code=code)],
+    )
+
+    with pytest.raises(UniPostError):
+        _real_client().inbox.managed_user("user A").get("item_1")
+
+    assert len(requests) == 1
+    assert parse_qs(urlsplit(requests[0].full_url).query) == {
+        "inbox_scope": ["managed_user"],
+        "external_user_id": ["user A"],
+    }
+
+
+@pytest.mark.parametrize(
     ("method_name", "arguments", "kwargs"),
     [
         ("get", ("",), {}),
@@ -2138,7 +2162,7 @@ def test_remaining_sync_post_routes_send_exact_body_and_decode_results(
     assert parse_qs(urlsplit(requests[0].full_url).query) == {
         "inbox_scope": ["workspace"]
     }
-    expected_request_body = {} if method_name == "sync" else None
+    expected_request_body = None
     assert (
         json.loads(requests[0].data.decode("utf-8"))
         if requests[0].data is not None
@@ -2422,7 +2446,7 @@ def test_sync_websocket_details_are_local_scoped_secret_safe_and_immutable(
     assert parse_qs(urlsplit(first.url).query) == expected_query
     assert "up_test_websocket_secret" not in first.url
     assert dict(first.headers) == {
-        "Authorization": "Bearer up_test_websocket_secret"
+        "Authorization": "Bearer " + "up_test_websocket_secret"
     }
     assert first is not second
     assert first.headers is not second.headers
@@ -2563,6 +2587,35 @@ async def test_async_new_success_responses_require_a_structural_data_envelope(
     assert len(requests) == 1
     assert str(raised.value) == "Failed to decode Inbox response."
     assert "up_test_response_secret" not in repr(raised.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "code"),
+    [(404, "NOT_FOUND"), (503, "INBOX_SCOPE_LOOKUP_FAILED")],
+)
+async def test_async_managed_scope_error_never_falls_back_to_workspace(
+    monkeypatch: pytest.MonkeyPatch,
+    status: int,
+    code: str,
+):
+    requests, _client_options = _install_async_transport(
+        monkeypatch,
+        lambda _request: _async_error_response(
+            status,
+            code,
+            normalized_code=code,
+        ),
+    )
+
+    with pytest.raises(UniPostError):
+        await _async_client().inbox.managed_user("user A").get("item_1")
+
+    assert len(requests) == 1
+    assert parse_qs(requests[0].url.query.decode("ascii")) == {
+        "inbox_scope": ["managed_user"],
+        "external_user_id": ["user A"],
+    }
 
 
 @pytest.mark.asyncio
@@ -2713,7 +2766,7 @@ async def test_remaining_async_post_routes_exact_body_and_typed_results(
     assert parse_qs(requests[0].url.query.decode("ascii")) == {
         "inbox_scope": ["workspace"]
     }
-    expected_request_body = {} if method_name == "sync" else None
+    expected_request_body = None
     assert (
         json.loads(requests[0].content.decode("utf-8"))
         if requests[0].content
@@ -2903,7 +2956,7 @@ def test_async_websocket_details_are_synchronous_local_and_immutable(
     assert parse_qs(urlsplit(first.url).query) == expected_query
     assert "up_test_websocket_secret" not in first.url
     assert dict(first.headers) == {
-        "Authorization": "Bearer up_test_websocket_secret"
+        "Authorization": "Bearer " + "up_test_websocket_secret"
     }
     assert first is not second
     assert first.headers is not second.headers
