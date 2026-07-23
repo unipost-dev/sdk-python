@@ -1946,7 +1946,7 @@ def test_remaining_sync_get_routes_encode_ids_and_decode_typed_results(
 ):
     requests, calls = _stub_urlopen(
         monkeypatch,
-        [_StubResponse(200, response_body)],
+        [_StubResponse(200, {"data": response_body})],
     )
 
     result = getattr(_real_client().inbox.managed_user("user A"), method_name)(
@@ -1966,6 +1966,33 @@ def test_remaining_sync_get_routes_encode_ids_and_decode_typed_results(
     for name, value in fields.items():
         assert getattr(result, name) == value
     assert not hasattr(result, "unknown")
+
+
+@pytest.mark.parametrize(
+    "response_body",
+    [
+        {"count": 3},
+        {},
+        {"data": None},
+        {"data": []},
+        {"data": "up_test_response_secret"},
+    ],
+)
+def test_sync_new_success_responses_require_a_structural_data_envelope(
+    monkeypatch: pytest.MonkeyPatch,
+    response_body: object,
+):
+    requests, _calls = _stub_urlopen(
+        monkeypatch,
+        [_StubResponse(200, response_body)],
+    )
+
+    with pytest.raises(ValueError) as raised:
+        _real_client().inbox.workspace().unread_count()
+
+    assert len(requests) == 1
+    assert str(raised.value) == "Failed to decode Inbox response."
+    assert "up_test_response_secret" not in repr(raised.value)
 
 
 @pytest.mark.parametrize(
@@ -2006,7 +2033,10 @@ def test_sync_update_thread_state_accepts_canonical_statuses_and_exact_body(
     assigned_to: Optional[str],
 ):
     payload = {**_reply_item_payload(), "thread_status": thread_status}
-    requests, calls = _stub_urlopen(monkeypatch, [_StubResponse(200, payload)])
+    requests, calls = _stub_urlopen(
+        monkeypatch,
+        [_StubResponse(200, {"data": payload})],
+    )
 
     result = _real_client().inbox.workspace().update_thread_state(
         "item /?#",
@@ -2089,7 +2119,12 @@ def test_remaining_sync_post_routes_send_exact_body_and_decode_results(
 ):
     requests, calls = _stub_urlopen(
         monkeypatch,
-        [_StubResponse(status, body)],
+        [
+            _StubResponse(
+                status,
+                None if body is None else {"data": body},
+            )
+        ],
     )
 
     result = getattr(_real_client().inbox.workspace(), method_name)(
@@ -2144,7 +2179,7 @@ def test_x_backfill_request_is_frozen_and_serializes_every_supplied_field(
     }
     requests, calls = _stub_urlopen(
         monkeypatch,
-        [_StubResponse(200, response)],
+        [_StubResponse(200, {"data": response})],
     )
 
     result = _real_client().inbox.workspace().sync(x_backfill=request)
@@ -2234,7 +2269,7 @@ def test_sync_decodes_each_exact_x_backfill_discriminant_and_nested_details(
 ):
     requests, _calls = _stub_urlopen(
         monkeypatch,
-        [_StubResponse(200, payload)],
+        [_StubResponse(200, {"data": payload})],
     )
 
     result = _real_client().inbox.workspace().sync(
@@ -2273,7 +2308,7 @@ def test_sync_x_backfill_missing_or_invalid_structure_fails_closed_safely(
 ):
     requests, _calls = _stub_urlopen(
         monkeypatch,
-        [_StubResponse(200, payload)],
+        [_StubResponse(200, {"data": payload})],
     )
 
     with pytest.raises(ValueError) as raised:
@@ -2469,7 +2504,7 @@ async def test_remaining_async_get_routes_encode_ids_and_decode_typed_results(
 ):
     requests, client_options = _install_async_transport(
         monkeypatch,
-        lambda _request: httpx.Response(200, json=response_body),
+        lambda _request: httpx.Response(200, json={"data": response_body}),
     )
 
     result = await getattr(
@@ -2500,6 +2535,34 @@ async def test_remaining_async_get_routes_encode_ids_and_decode_typed_results(
     for name, value in fields.items():
         assert getattr(result, name) == value
     assert not hasattr(result, "unknown")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "response_body",
+    [
+        {"count": 3},
+        {},
+        {"data": None},
+        {"data": []},
+        {"data": "up_test_response_secret"},
+    ],
+)
+async def test_async_new_success_responses_require_a_structural_data_envelope(
+    monkeypatch: pytest.MonkeyPatch,
+    response_body: object,
+):
+    requests, _client_options = _install_async_transport(
+        monkeypatch,
+        lambda _request: httpx.Response(200, json=response_body),
+    )
+
+    with pytest.raises(ValueError) as raised:
+        await _async_client().inbox.workspace().unread_count()
+
+    assert len(requests) == 1
+    assert str(raised.value) == "Failed to decode Inbox response."
+    assert "up_test_response_secret" not in repr(raised.value)
 
 
 @pytest.mark.asyncio
@@ -2547,7 +2610,7 @@ async def test_async_update_thread_state_exact_body_and_typed_result(
     payload = {**_reply_item_payload(), "thread_status": thread_status}
     requests, client_options = _install_async_transport(
         monkeypatch,
-        lambda _request: httpx.Response(200, json=payload),
+        lambda _request: httpx.Response(200, json={"data": payload}),
     )
 
     result = await _async_client().inbox.workspace().update_thread_state(
@@ -2635,7 +2698,7 @@ async def test_remaining_async_post_routes_exact_body_and_typed_results(
     def handler(_request: httpx.Request) -> httpx.Response:
         if body is None:
             return httpx.Response(status)
-        return httpx.Response(status, json=body)
+        return httpx.Response(status, json={"data": body})
 
     requests, client_options = _install_async_transport(monkeypatch, handler)
 
@@ -2713,7 +2776,7 @@ async def test_async_x_backfill_serialization_and_discriminated_results(
 ):
     requests, _client_options = _install_async_transport(
         monkeypatch,
-        lambda _request: httpx.Response(200, json=payload),
+        lambda _request: httpx.Response(200, json={"data": payload}),
     )
 
     result = await _async_client().inbox.workspace().sync(

@@ -105,11 +105,18 @@ def _encode_request_id(request_id: str) -> str:
     return _encode_path_id(request_id, "request_id")
 
 
-def _decode_dataclass(cls: type, response: Any) -> Any:
+def _unwrap_data_envelope(response: Any) -> dict[str, Any]:
     if not isinstance(response, dict):
         raise ValueError(_INBOX_DECODE_ERROR)
+    data = response.get("data")
+    if not isinstance(data, dict):
+        raise ValueError(_INBOX_DECODE_ERROR)
+    return data
+
+
+def _decode_dataclass(cls: type, response: Any) -> Any:
     try:
-        return _from_dict(cls, response)
+        return _from_dict(cls, _unwrap_data_envelope(response))
     except (AttributeError, KeyError, TypeError, ValueError):
         raise ValueError(_INBOX_DECODE_ERROR) from None
 
@@ -135,14 +142,13 @@ def _decode_x_outbound_status(response: Any) -> XInboxOutboundStatus:
 
 
 def _decode_sync_response(response: Any) -> InboxSyncResult:
-    if not isinstance(response, dict):
-        raise ValueError(_INBOX_DECODE_ERROR)
     try:
-        errors = response["errors"]
-        details = response["details"]
+        data = _unwrap_data_envelope(response)
+        errors = data["errors"]
+        details = data["details"]
         if not isinstance(errors, list) or not isinstance(details, list):
             raise TypeError
-        decoded = dict(response)
+        decoded = dict(data)
         decoded["errors"] = [
             _from_dict(InboxSyncError, item)
             for item in errors
@@ -180,10 +186,8 @@ def _decode_backfill_details(response: dict[str, Any]) -> dict[str, Any]:
 
 
 def _decode_x_backfill_response(response: Any) -> XInboxBackfillResult:
-    if not isinstance(response, dict):
-        raise ValueError(_INBOX_DECODE_ERROR)
     try:
-        decoded = _decode_backfill_details(response)
+        decoded = _decode_backfill_details(_unwrap_data_envelope(response))
         if "status" in decoded:
             if decoded["status"] != "in_progress":
                 raise ValueError
